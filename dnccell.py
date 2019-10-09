@@ -24,8 +24,7 @@ class DNCCell(tf.keras.layers.SimpleRNNCell):
     def _clip_if_enabled(self, x):
         if self._clip_value > 0:
             return tf.clip_by_value(x, -self._clip_value, self._clip_value)
-        else:
-            return x
+        return x
 
     def __call__(self, inputs, prev_state):
         """ TODO 1. get read outputs from previous state and concatenate with input
