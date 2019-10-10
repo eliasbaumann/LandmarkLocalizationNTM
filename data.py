@@ -36,6 +36,7 @@ class Data_Loader():
         label_dir = pathlib.Path(PATH+self.name+'/Leica_2X_coords.tsv')
         
         label_data = tf.data.experimental.CsvDataset(str(label_dir),DROSO_DEFAULTS,header=True,field_delim='\t')
+        lookup = tf.concat([label_data[:8]],axis=1)
 
         list_ds = tf.data.Dataset.list_files(str(data_dir)+'*')
         bigboy_ds = list_ds.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -43,7 +44,7 @@ class Data_Loader():
             print(img.numpy().shape)
             print(label.numpy())
 
-        for row in label_data.take(1):
+        for row in lookup.take(1):
             print(row)        
 
 if __name__ == "__main__":
