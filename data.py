@@ -11,8 +11,11 @@ def decode_image(file_path):
 
 
 class Data_Loader():
-    def __init__(self, name):
+    def __init__(self, name, batch_size, repeat=True, prefetch=True):
         self.name = name
+        self.batch_size = batch_size
+        self.repeat = repeat
+        self.prefetch = prefetch
         
 
     def __call__(self):
@@ -20,6 +23,15 @@ class Data_Loader():
             self.load_droso()
         elif self.name == 'cephal':
             self.load_cephal()
+        
+        self.data.shuffle(buffer_size=1000)
+        if self.repeat:
+            self.data.repeat()
+        
+        self.data.batch(self.batch_size)
+        
+        if self.prefetch:
+            self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
     def load_cephal(self):
         data_dir = pathlib.Path(PATH+self.name+'/RawImage/')
@@ -35,12 +47,10 @@ class Data_Loader():
 
         
         self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        
+        _, label = self.data.take(1)
+        self.output_size = tf.shape(label)
         
     def load_droso(self):
         #TODO redo when we have droso data
         pass
     
-if __name__ == "__main__":
-    asdf = Data_Loader('cephal')
-    asdf()
