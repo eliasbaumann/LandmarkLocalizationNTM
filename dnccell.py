@@ -8,10 +8,9 @@ DNCState = collections.namedtuple('DNCState', ('access_output', 'access_state',
 
 
 class DNCCell(tf.keras.layers.SimpleRNNCell):
-    def __init__(self, access_config, controller_config, output_size, clip_value= None, name='dnc'):
-        # TODO
+    def __init__(self, access_config, controller_config, output_size, clip_value=None, name='dnc'):
         super(DNCCell, self).__init__(name=name)
-        self._controller = tf.keras.layers.LSTM(**controller_config)  # TODO what do we do here?
+        self._controller = tf.keras.layers.LSTM(**controller_config) # TODO Check what config contains
         self._access = access.MemoryAccess(**access_config) 
 
         self._access_output_size = np.prod(self._access_output_size.as_list())
@@ -27,9 +26,31 @@ class DNCCell(tf.keras.layers.SimpleRNNCell):
         return x
 
     def __call__(self, inputs, prev_state):
-        """ TODO 1. get read outputs from previous state and concatenate with input
-                 2. run controller on inputs
-                 3. use contoller outputs to do read write access stuff
-                 4. output contoller output and access output
-        """
+        prev_access_output = prev_state.access_output
+        prev_access_state = prev_state.access_state
+        prev_controller_state = prev_state.controller_state
+
+        controller_input = tf.concat([tf.keras.backend.batch_flatten(inputs), tf.keras.backend.batch_flatten(prev_access_output)],1)
+        controller_output, controller_state = self._controller(controller_input, prev_controller_state)
+
+        controller_output = self._clip_if_enabled(controller_output)
+        controller_state = tf.nest.map_structure(self._clip_if_enabled, controller_state)
+
+        access_output, access_state = self._access(controller_output, prev_access_state)
+
+        output = tf.concat([controller_output, tf.keras.backend.batch_flatten(access_output)], 1)
+        output = tf.keras.layers.Dense(self._output_size.as_list()[0], name='output_linear')(output)
+        output = self._clip_if_enabled(output)
+        return output, DNCState(access_output=access_output, access_state=access_state, controller_state=controller_state)
+
+    def initial_state(self, batch_size, dtype=tf.float32):
+        return DNCState(controller_state=self._controller.initial_state(batch_size, dtype), access_state=self._access.initial_state(batch_size, dtype), access_output=tf.zeros([batch_size] + self._access.output_size.as_list(), dtype))
+    
+    @property
+    def state_size(self):
+        return self._state_size
+
+    @property
+    def output_size(self):
+        return self._output_size
 
