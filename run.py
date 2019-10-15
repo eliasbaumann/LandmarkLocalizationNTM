@@ -1,1 +1,60 @@
-# TODO write a proper run file
+import tensorflow as tf
+import dnccell
+import data
+
+import argparse
+
+parser = argparse.ArgumentParser()
+
+# Task
+parser.add_argument('--dataset', type=str, default='cephal', help='TODO')
+parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
+
+# Model parameters
+parser.add_argument('--hidden_size', int, 64, 'Size of LSTM hidden layer.')
+parser.add_argument('--memory_size', int, 16, 'The number of memory slots.')
+parser.add_argument('--word_size', int, 16, 'The width of each memory slot.')
+parser.add_argument('--num_write_heads', int, 1, 'Number of memory write heads.')
+parser.add_argument('--num_read_heads', int, 4, 'Number of memory read heads.')
+parser.add_argument('--clip_value', int, 20,
+                        'Maximum absolute value of controller and dnc outputs.')
+
+# Optimizer parameters.
+parser.add_argument('--max_grad_norm', float, 50, 'Gradient clipping norm limit.')
+parser.add_argument('--learning_rate', float, 1e-4, 'Optimizer learning rate.')
+parser.add_argument('--optimizer_epsilon', float, 1e-10,
+                      'Epsilon used for RMSProp optimizer.')
+
+# Training options.
+parser.add_argument('--num_training_iterations', int, 100000,
+                        'Number of iterations to train for.')
+parser.add_argument('--report_interval', int, 100,
+                        'Iterations between reports (samples, valid loss).')
+parser.add_argument('--checkpoint_dir', str, '/tmp/tf/dnc',
+                       'Checkpointing directory.')
+parser.add_argument('--checkpoint_interval', int, -1,
+                        'Checkpointing step interval.')
+
+args = parser.parse_args()
+
+
+def run_model(input_sequence, output_size):
+    access_config = {
+        "memory_size": args.memory_size,
+        "word_size": args.word_size,
+        "num_reads": args.num_read_heads,
+        "num_writes": args.num_write_heads}
+    controller_config = {
+        "hidden_size": args.hidden_size}
+    clip_value = args.clip_value
+
+    cell = dnccell.DNCCell(access_config, controller_config, output_size, clip_value)
+    initial_state = cell.initial_state(args.batch_size)
+    output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True, initial_state=initial_state)(input_sequence)
+
+    return output_sequence
+
+def train(num_training_iterations, report_interval):
+    dataset = data.Data_Loader(args.dataset, args.batch_size)()
+    
+    output_logits = run_model(dataset.data, dataset.output_size)
