@@ -23,13 +23,14 @@ def _erase_and_write(memory, address, reset_weights, values):
     return memory
 
 
-class MemoryAccess(tf.keras.layers.SimpleRNNCell):
+class MemoryAccess(tf.keras.layers.AbstractRNNCell):
     def __init__(self, memory_size=128, word_size=20, num_reads=1, num_writes=1, name='memory_access'):
-        super(MemoryAccess, self).__init__(name=name)
+        super(MemoryAccess, self).__init__()
         self._memory_size = memory_size
         self._word_size = word_size
         self._num_reads = num_reads
         self._num_writes = num_writes
+        self._name = name
 
         self._write_content_weights_mod = adressing.CosineWeights(num_writes, word_size, name='write_content_weights')
         self._read_content_weights_mod = adressing.CosineWeights(num_reads, word_size, name='read_content_weights')
@@ -143,8 +144,7 @@ class MemoryAccess(tf.keras.layers.SimpleRNNCell):
             write_gate = tf.expand_dims(inputs['write_gate'], -1)
 
             # w_t^{w, i} - The write weightings for each write head.
-            return write_gate * (allocation_gate * write_allocation_weights +
-                                (1 - allocation_gate) * write_content_weights)
+            return write_gate * (allocation_gate * write_allocation_weights + (1 - allocation_gate) * write_content_weights)
 
     def _read_weights(self, inputs, memory, prev_read_weights, link):
         with tf.name_scope(

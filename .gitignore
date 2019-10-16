@@ -1,0 +1,6 @@
+ignore.py
+__pycache__/data.cpython-36.pyc
+__pycache__/access.cpython-36.pyc
+__pycache__/adressing.cpython-36.pyc
+__pycache__/dnccell.cpython-36.pyc
+__pycache__/util.cpython-36.pyc

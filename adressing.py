@@ -40,11 +40,12 @@ class CosineWeights(tf.keras.layers.Layer):
         return weighted_softmax(similarity, strengths, self._strength_op)
 
 
-class TemporalLinkage(tf.keras.layers.SimpleRNNCell):
+class TemporalLinkage(tf.keras.layers.AbstractRNNCell):
     def __init__(self, memory_size, num_writes, name='temporal_linkage'):
-        super(TemporalLinkage, self).__init__(name=name)
+        super(TemporalLinkage, self).__init__()
         self._memory_size = memory_size
         self._num_writes = num_writes
+        self._name = name
 
     def __call__(self, write_weights, prev_state):
         link = self._link(prev_state.link, prev_state.precedence_weights, prev_state.write_weights)
@@ -67,8 +68,8 @@ class TemporalLinkage(tf.keras.layers.SimpleRNNCell):
             new_link = write_weights_i * prev_precedence_weights_j
             link = prev_link_scale * prev_link + new_link
             return tf.linalg.set_diag(link, tf.zeros(
-                    [batch_size, self._num_writes, self._memory_size],
-                    dtype=link.dtype))
+                [batch_size, self._num_writes, self._memory_size],
+                dtype=link.dtype))
 
     def _precedence_weights(self, prev_precedence_weights, write_weights):
         with tf.name_scope('precedence_weights'):
@@ -80,11 +81,12 @@ class TemporalLinkage(tf.keras.layers.SimpleRNNCell):
         return TemporalLinkageState(link=tf.TensorShape([self._num_writes, self._memory_size, self._memory_size]), precedence_weights=tf.TensorShape([self._num_writes, self._memory_size]),)
 
 
-class Freeness(tf.keras.layers.SimpleRNNCell):
+class Freeness(tf.keras.layers.AbstractRNNCell):
     def __init__(self, memory_size, name='freeness'):
-        super(Freeness, self).__init__(name=name)
+        super(Freeness, self).__init__()
         self._memory_size = memory_size
-    
+        self._name = name
+
     def __call__(self, write_weights, free_gate, read_weights, prev_usage):
         write_weights = tf.stop_gradient(write_weights)
         usage = self._usage_after_write(prev_usage, write_weights)

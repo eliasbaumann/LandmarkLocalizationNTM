@@ -7,18 +7,24 @@ DNCState = collections.namedtuple('DNCState', ('access_output', 'access_state',
                                                'controller_state'))
 
 
-class DNCCell(tf.keras.layers.SimpleRNNCell):
+class DNCCell(tf.keras.layers.AbstractRNNCell):
     def __init__(self, access_config, controller_config, output_size, clip_value=None, name='dnc'):
-        super(DNCCell, self).__init__(name=name)
-        self._controller = tf.keras.layers.LSTM(**controller_config) # TODO Check what config contains
+        super(DNCCell, self).__init__()
+        self.controller_layers = controller_config['hidden_layers']
+        self.controller_size = controller_config['hidden_size']
+        
+        def single_cell(num_units):
+            return tf.keras.layers.LSTMCell(num_units)
+        self._controller = tf.keras.layers.StackedRNNCells([single_cell(self.controller_size) for _ in range(self.controller_layers)])
+        # self._controller = tf.keras.layers.LSTM(**controller_config) 
         self._access = access.MemoryAccess(**access_config) 
 
-        self._access_output_size = np.prod(self._access_output_size.as_list())
+        self._access_output_size = np.prod(self._access.output_size.as_list())
         self._output_size = output_size
         self._clip_value = clip_value or 0
 
         self._output_size = tf.TensorShape([output_size])
-        self._state_size = DNCState(access_output=self._access_output_size, access_state=self._access.state_size, controller_state=self._controller.state_size)
+        self._state_size = DNCState(access_output=self._access_output_size, access_state=self._access.state_size, controller_state=self.controller_size)
 
     def _clip_if_enabled(self, x):
         if self._clip_value > 0:
@@ -44,7 +50,9 @@ class DNCCell(tf.keras.layers.SimpleRNNCell):
         return output, DNCState(access_output=access_output, access_state=access_state, controller_state=controller_state)
 
     def initial_state(self, batch_size, dtype=tf.float32):
-        return DNCState(controller_state=self._controller.initial_state(batch_size, dtype), access_state=self._access.initial_state(batch_size, dtype), access_output=tf.zeros([batch_size] + self._access.output_size.as_list(), dtype))
+        return DNCState(controller_state=self._controller.get_initial_state(inputs=None, batch_size=batch_size, dtype=dtype),
+            access_state=self._access.get_initial_state(inputs=None, batch_size=batch_size, dtype=dtype),
+            access_output=tf.zeros([batch_size] + self._access.output_size.as_list(), dtype))
     
     @property
     def state_size(self):
