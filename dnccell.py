@@ -23,7 +23,7 @@ class DNCCell(tf.keras.layers.AbstractRNNCell):
         self._output_size = output_size
         self._clip_value = clip_value or 0
 
-        self._output_size = tf.TensorShape([output_size])
+        self._output_size = output_size #TODO
         self._state_size = DNCState(access_output=self._access_output_size, access_state=self._access.state_size, controller_state=self.controller_size)
 
     def _clip_if_enabled(self, x):
