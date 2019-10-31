@@ -7,11 +7,12 @@ import argparse
 parser = argparse.ArgumentParser()
 
 # Task
-parser.add_argument('--dataset', type=str, default='cephal', help='TODO')
+parser.add_argument('--dataset', type=str, default='droso', help='TODO')
 parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
 
 # Model parameters
 parser.add_argument('--hidden_size', type=int, default=64, help='Size of LSTM hidden layer.')
+parser.add_argument('--hidden_layers', type=int, default=2, help='Number of LSTM hidden layers')
 parser.add_argument('--memory_size', type=int, default=16, help='The number of memory slots.')
 parser.add_argument('--word_size', type=int, default=16, help='The width of each memory slot.')
 parser.add_argument('--num_write_heads', type=int, default=1, help='Number of memory write heads.')
@@ -49,31 +50,32 @@ class dnc_model(tf.keras.Model):
             "num_reads": args.num_read_heads,
             "num_writes": args.num_write_heads}
         controller_config = {
+            "hidden_layers": args.hidden_layers,
             "hidden_size": args.hidden_size}
         clip_value = args.clip_value
         cell = dnccell.DNCCell(access_config, controller_config, self.output_size, clip_value)
         initial_state = cell.initial_state(args.batch_size)
-        output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True, initial_state=initial_state)(inputs)
+        output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True)(inputs, initial_state=initial_state)
         return output_sequence
         
 def loss_func(value,label):
     return 0
 
 def train(num_training_iterations, report_interval):
-    count = 0
-    dataset = data.Data_Loader(args.dataset, args.batch_size)()
+    dataset = data.Data_Loader(args.dataset, args.batch_size)
+    dataset()
     iterator = iter(dataset.data)
-    model = dnc_model(dataset.output_size)
-    optimizer = tf.keras.optimizers.RMSprop(learning_rate=args.learning_rate,epsilon=args.optimizer_epsilon)
-    for iteration in num_training_iterations:
+    model = dnc_model(dataset.im_size) # TODO dataset has no outputsize anymore, because we predict heatmaps, we need to construct it differently now
+    optimizer = tf.keras.optimizers.RMSprop(learning_rate=args.learning_rate, epsilon=args.optimizer_epsilon)
+    for iteration in range(num_training_iterations):
         observation, label = next(iterator)
         with tf.GradientTape() as tape:
             output_logits = model(observation)
             loss = loss_func(output_logits, label)
         grads, _ = tf.clip_by_global_norm(tape.gradient(loss, model.trainable_weights), args.max_grad_norm)
         optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        count +=1
-        if count % report_interval == 0:
+        
+        if iteration % report_interval == 0:
             print(loss)
 
 if __name__ == "__main__":
