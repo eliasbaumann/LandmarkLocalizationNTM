@@ -1,7 +1,10 @@
-import tensorflow as tf
 import pathlib
+import tensorflow as tf
+import albumentations as albu
+import numpy as np
 
 PATH = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
+
 
 def decode_image(file_path):
     img = tf.io.read_file(file_path)
@@ -17,14 +20,53 @@ class Data_Loader():
         self.prefetch = prefetch
         self.data = None
         self.n_landmarks = None
-        self.im_size = None
+        self.augmentations = []
         
 
     def __call__(self):
+        im_size = [512, 512]
         if self.name == 'droso':
+            im_size = [512, 608] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
             self.load_droso()
+            
         elif self.name == 'cephal':
+            im_size = [512, 413] # HW
             self.load_cephal()
+
+
+        def _albu_transform(image, keypoints):
+            transformed = albu.Compose([albu.Resize(im_size[0],im_size[1],always_apply=True),
+                                        albu.Flip(p=.5),
+                                        albu.RandomSizedCrop((int(.3*im_size[0]),int(.9*im_size[0])),im_size[0],
+                                                              im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
+                                        albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5),
+                                        albu.RandomBrightnessContrast(brightness_limit=.2,contrast_limit=.2,p=.5)],
+                                       p=1,
+                                       keypoint_params=albu.KeypointParams(format='xy'))(image=image, keypoints=keypoints)
+            return np.array(transformed['image'],dtype=np.float32), np.array(transformed['keypoints'],dtype=np.float32)
+        
+        def _albu_resize(image, keypoints):
+            transformed = albu.Compose([albu.Resize(im_size[0], im_size[1], always_apply=True)], p=1, keypoint_params=albu.KeypointParams(format='xy'))(image=image, keypoints=keypoints)
+            return np.array(transformed['image'],dtype=np.float32), np.array(transformed['keypoints'],dtype=np.float32)
+
+        def _augment(img, lab):
+            # img_dtype = img.dtype
+            # img_shape = tf.shape(img)
+            images, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
+            return images, keypoints
+
+        def _resize(img, lab):
+            images, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
+            return images, keypoints
+
+        def generate_augmentations(images, keypoints):
+            regular_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
+            aug_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_augment)
+            return regular_ds.concatenate(aug_ds)
+
+        self.data = self.data.flat_map(generate_augmentations)
+
+    
         
         self.data.shuffle(buffer_size=1000)
         if self.repeat:
@@ -69,5 +111,5 @@ class Data_Loader():
             return img, label
 
         self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        self.im_size = decode_image(str(PATH+self.name+'/images/NG-SP196-909-0001.jpg')).shape
-    
+        #self.im_size = decode_image(str(PATH+self.name+'/images/NG-SP196-909-0001.jpg')).shape
+
