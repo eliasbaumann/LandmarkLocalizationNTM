@@ -24,7 +24,7 @@ class Data_Loader():
         
 
     def __call__(self):
-        im_size = [512, 512]
+        im_size = [512, 512] # just define a standard value
         if self.name == 'droso':
             im_size = [512, 608] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
             self.load_droso()
@@ -33,7 +33,18 @@ class Data_Loader():
             im_size = [512, 413] # HW
             self.load_cephal()
 
+        self.pre_process(im_size)
 
+        self.data.shuffle(buffer_size=1000)
+        if self.repeat:
+            self.data.repeat()
+        
+        self.data.batch(self.batch_size)
+        
+        if self.prefetch:
+            self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+
+    def pre_process(self,im_size):
         def _albu_transform(image, keypoints):
             transformed = albu.Compose([albu.Resize(im_size[0],im_size[1],always_apply=True),
                                         albu.Flip(p=.5),
@@ -46,7 +57,8 @@ class Data_Loader():
             return np.array(transformed['image'],dtype=np.float32), np.array(transformed['keypoints'],dtype=np.float32)
         
         def _albu_resize(image, keypoints):
-            transformed = albu.Compose([albu.Resize(im_size[0], im_size[1], always_apply=True)], p=1, keypoint_params=albu.KeypointParams(format='xy'))(image=image, keypoints=keypoints)
+            transformed = albu.Compose([albu.Resize(im_size[0], im_size[1], always_apply=True)], 
+                                       p=1, keypoint_params=albu.KeypointParams(format='xy'))(image=image, keypoints=keypoints)
             return np.array(transformed['image'],dtype=np.float32), np.array(transformed['keypoints'],dtype=np.float32)
 
         def _augment(img, lab):
@@ -61,25 +73,13 @@ class Data_Loader():
 
         def generate_augmentations(images, keypoints):
             regular_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
-            aug_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_augment)
-            return regular_ds.concatenate(aug_ds)
+            for _ in range(3): # TODO this is how many rounds of additional images
+                aug_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_augment)
+                regular_ds.concatenate(aug_ds)
+
+            return regular_ds
 
         self.data = self.data.flat_map(generate_augmentations)
-
-    
-        
-        self.data.shuffle(buffer_size=1000)
-        if self.repeat:
-            self.data.repeat()
-        
-        self.data.batch(self.batch_size)
-        
-        if self.prefetch:
-            self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-
-    def pre_process(self):
-        # Construct a pre_processing pipeline here
-        pass
 
     def load_cephal(self):
         self.n_landmarks = 19
