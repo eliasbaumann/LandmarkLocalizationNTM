@@ -1,6 +1,7 @@
 import tensorflow as tf
 import dnccell
 import data
+import unet
 
 import argparse
 
@@ -58,10 +59,32 @@ class dnc_model(tf.keras.Model):
         output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True)(inputs, initial_state=initial_state)
         return output_sequence
         
-def loss_func(value,label):
+def loss_func(gt_labels, logits):
     return 0
 
-def train(num_training_iterations, report_interval):
+def train_unet(num_training_iterations, report_interval):
+    dataset = data.Data_Loader(args.dataset, args.batch_size)
+    dataset()
+    iterator = iter(dataset.data)
+    samp_img, samp_label = next(iterator) # TODO do this via im_size from data
+    unet_model = unet.unet2d(32,2,[[2,2],[2,2],[2,2]],dataset.n_landmarks)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    
+    n_epochs = 3 # TODO
+
+    for epoch in range(n_epochs):
+        for iteration in range(num_training_iterations):
+            img, label = next(iterator)
+            with tf.GradientTape() as tape:
+                logits = unet_model(img)
+                loss = loss_func(label, logits)
+            grads = tape.gradient(loss, unet_model.trainable_weights)
+            optimizer.apply_gradients(zip(grads, unet_model.trainable_weights))
+
+            if(iteration % report_interval == 0):
+                print(loss)
+
+def train_dnc(num_training_iterations, report_interval):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset()
     iterator = iter(dataset.data)
@@ -79,4 +102,5 @@ def train(num_training_iterations, report_interval):
             print(loss)
 
 if __name__ == "__main__":
-    train(args.num_training_iterations, args.report_interval)
+    # train_dnc(args.num_training_iterations, args.report_interval)
+    train_unet(args.num_training_iterations, args.report_interval)
