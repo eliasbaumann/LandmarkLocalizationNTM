@@ -14,10 +14,10 @@ class Heatmap_Generator(object):
         gaussian = tfp.distributions.MultivariateNormalDiag(loc=coords, scale_diag=tf.ones(tf.shape(coords),tf.float32)*self.sigma)
         prob = tf.reshape(gaussian.prob(idx),tf.shape(X))
         return prob
-
+    
     def generate_heatmaps(self, coord_list):
-        hm_list = [self._generate_heatmap(x) for x in coord_list]
-        return tf.stack(hm_list,axis=0)
+        hm_list = tf.map_fn(self._generate_heatmap, coord_list)
+        return hm_list#tf.stack(hm_list,axis=0)
 
 
 
