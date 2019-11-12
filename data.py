@@ -2,6 +2,7 @@ import pathlib
 import tensorflow as tf
 import albumentations as albu
 import numpy as np
+from heatmapgen import Heatmap_Generator
 
 PATH = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
 
@@ -32,19 +33,28 @@ class Data_Loader():
         elif self.name == 'cephal':
             im_size = [512, 413] # HW
             self.load_cephal()
-
+        self.data = self.data.shuffle(buffer_size=128)
+        # TODO train test val split (take and skip)
+        # self.train_data = self.data.take(n_train_obs)
+        # self.test_data = self.data.skip(n_train_obs)
+        # self.val_data = self.test_data.take(n_val_obs)
+        # self.test_data = self.test_data.skip(n_val_obs)
         self.pre_process(im_size)
 
-        self.data.shuffle(buffer_size=1000)
-        if self.repeat:
-            self.data.repeat()
         
-        self.data.batch(self.batch_size)
+        if self.repeat:
+            self.data = self.data.repeat()
+        
+        self.data = self.data.batch(self.batch_size, drop_remainder = True)
         
         if self.prefetch:
-            self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+            self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
     def pre_process(self,im_size):
+        def convert_to_hm(keypoints):
+            heatmaps = Heatmap_Generator(im_size, 3).generate_heatmaps(keypoints) #TODO parameterize
+            return heatmaps
+
         def _albu_transform(image, keypoints):
             transformed = albu.Compose([albu.Resize(im_size[0],im_size[1],always_apply=True),
                                         albu.Flip(p=.5),
@@ -65,10 +75,12 @@ class Data_Loader():
             # img_dtype = img.dtype
             # img_shape = tf.shape(img)
             images, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
+            keypoints = convert_to_hm(keypoints)
             return images, keypoints
 
         def _resize(img, lab):
             images, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
+            keypoints = convert_to_hm(keypoints)
             return images, keypoints
 
         def generate_augmentations(images, keypoints):
@@ -100,9 +112,10 @@ class Data_Loader():
     def load_droso(self):
         self.n_landmarks = 40
         data_dir = pathlib.Path(PATH+self.name+'/images/')
-        list_im = tf.data.Dataset.list_files(str(data_dir)+'*')
+        list_im = tf.data.Dataset.list_files(str(data_dir)+'*.jpg')
 
         def process_path(file_path):
+            
             img = decode_image(file_path)
             file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
             label = tf.strings.split(tf.io.read_file(PATH+self.name+'/raw/'+file_name+'.txt'), sep='\n')[:-1]
