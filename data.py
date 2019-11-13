@@ -27,7 +27,8 @@ class Data_Loader():
     def __call__(self):
         im_size = [512, 512] # just define a standard value
         if self.name == 'droso':
-            im_size = [512, 608] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
+            im_size = [256, 304] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
+            self.n_landmarks = 40
             self.load_droso()
             
         elif self.name == 'cephal':
@@ -51,37 +52,49 @@ class Data_Loader():
             self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
     def pre_process(self,im_size):
+
+        def check_keypoints(keypoints):
+            pass
+
         def convert_to_hm(keypoints):
-            heatmaps = Heatmap_Generator(im_size, 3).generate_heatmaps(keypoints) #TODO parameterize
+            heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
             return heatmaps
 
         def _albu_transform(image, keypoints):
-            transformed = albu.Compose([albu.Resize(im_size[0],im_size[1],always_apply=True),
+            transformed = albu.Compose([albu.Resize(im_size[0],im_size[1]),
                                         albu.Flip(p=.5),
                                         albu.RandomSizedCrop((int(.3*im_size[0]),int(.9*im_size[0])),im_size[0],
                                                               im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
                                         albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5),
                                         albu.RandomBrightnessContrast(brightness_limit=.2,contrast_limit=.2,p=.5)],
                                        p=1,
-                                       keypoint_params=albu.KeypointParams(format='xy'))(image=image, keypoints=keypoints)
-            return np.array(transformed['image'],dtype=np.float32), np.array(transformed['keypoints'],dtype=np.float32)
+                                       keypoint_params=albu.KeypointParams(format='xy',remove_invisible=True))(image=image, keypoints=keypoints)
+            image = np.array(transformed['image'],dtype=np.float32)
+            keypoints = np.array(transformed['keypoints'],dtype=np.float32)
+            if(len(image.shape)<3):
+                np.expand_dims(image,axis=-1)
+            return image, keypoints
         
         def _albu_resize(image, keypoints):
-            transformed = albu.Compose([albu.Resize(im_size[0], im_size[1], always_apply=True)], 
-                                       p=1, keypoint_params=albu.KeypointParams(format='xy'))(image=image, keypoints=keypoints)
-            return np.array(transformed['image'],dtype=np.float32), np.array(transformed['keypoints'],dtype=np.float32)
+            transformed = albu.Compose([albu.Resize(im_size[0], im_size[1])], 
+                                       p=1, keypoint_params=albu.KeypointParams(format='xy',remove_invisible=True))(image=image, keypoints=keypoints)
+            image = np.array(transformed['image'],dtype=np.float32)
+            keypoints = np.array(transformed['keypoints'],dtype=np.float32)
+            if(len(image.shape)<3):
+                np.expand_dims(image,axis=-1)
+            return image, keypoints
 
         def _augment(img, lab):
             # img_dtype = img.dtype
             # img_shape = tf.shape(img)
-            images, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
+            image, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
             keypoints = convert_to_hm(keypoints)
-            return images, keypoints
+            return image, keypoints
 
         def _resize(img, lab):
-            images, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
+            image, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
             keypoints = convert_to_hm(keypoints)
-            return images, keypoints
+            return image, keypoints
 
         def generate_augmentations(images, keypoints):
             regular_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
@@ -100,6 +113,7 @@ class Data_Loader():
         
         def process_path(file_path):
             img = decode_image(file_path)
+            # img = tf.expand_dims(img, -1)
             file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
             label = tf.strings.split(tf.io.read_file(PATH+self.name+'/400_senior/'+file_name+'.txt'),sep='\r\n')[:self.n_landmarks]
             label = tf.map_fn(lambda x: tf.strings.split(x,sep=','),label)
