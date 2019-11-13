@@ -16,15 +16,15 @@ class unet2d(tf.keras.Model):
 def conv_pass(fmaps_in, kernel_size, num_fmaps, num_repetitions, activation=tf.keras.activations.relu, name='conv_pass'):
     fmaps = fmaps_in
     for i in range(num_repetitions):
-        fmaps = tf.keras.layers.Conv2D(filters=num_fmaps, kernel_size=kernel_size, padding='valid', data_format='channels_first', activation=activation, name=name+'_%i'%i)(fmaps) #TODO channels correct?
+        fmaps = tf.keras.layers.Conv2D(filters=num_fmaps, kernel_size=kernel_size, padding='valid', data_format='channels_last', activation=activation, name=name+'_%i'%i)(fmaps) #TODO channels correct?
     return fmaps
 
 def downsample(fmaps_in, factors, name='ds'):
-    fmaps = tf.keras.layers.MaxPool2D(pool_size=factors, strides=factors, padding='valid', data_format='channels_first', name=name)(fmaps_in)
+    fmaps = tf.keras.layers.MaxPool2D(pool_size=factors, strides=factors, padding='valid', data_format='channels_last', name=name)(fmaps_in)
     return fmaps
 
 def upsample(fmaps_in, factors, num_fmaps, activation=tf.keras.activations.relu, name='us'):
-    fmaps = tf.keras.layers.Conv2DTranspose(filters=num_fmaps, kernel_size=factors, strides=factors, padding='valid', data_format='channels_first', activation=activation, name=name)(fmaps_in)
+    fmaps = tf.keras.layers.Conv2DTranspose(filters=num_fmaps, kernel_size=factors, strides=factors, padding='valid', data_format='channels_last', activation=activation, name=name)(fmaps_in)
     return fmaps
 
 def crop_spatial(fmaps_in, shape):
