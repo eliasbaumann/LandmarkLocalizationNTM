@@ -1,5 +1,5 @@
-import tensorflow as tf
 import collections
+import tensorflow as tf
 import util
 
 _EPSILON = 1e-6
@@ -22,20 +22,23 @@ def weighted_softmax(activations, strengths, strengths_op):
 
 class CosineWeights(tf.keras.layers.Layer):
     def __init__(self,
-               num_heads,
-               word_size,
-               strength_op=tf.nn.softplus,
-               name='cosine_weights'):
+                 num_heads,
+                 word_size,
+                 strength_op=tf.nn.softplus,
+                 name='cosine_weights'):
         super(CosineWeights, self).__init__(name=name)
-        self._num_heads = num_heads
-        self._word_size = word_size
+        self._num_heads = num_heads # TODO maybe remove these two lines because unused?
+        self._word_size = word_size 
         self._strength_op = strength_op
 
     def __call__(self, memory, keys, strengths):
+        # Nominator of cosine similarity:
         dot = tf.matmul(keys, memory, adjoint_b=True)
+        # Denominator of cosine sim.
         memory_norms = vector_norms(memory)
         key_norms = vector_norms(keys)
         norm = tf.matmul(key_norms, memory_norms, adjoint_b=True)
+        # result:
         similarity = dot / (norm + _EPSILON)
         return weighted_softmax(similarity, strengths, self._strength_op)
 
