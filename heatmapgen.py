@@ -14,11 +14,12 @@ class Heatmap_Generator(object):
         idx = tf.concat([tf.reshape(X, [-1, 1]), tf.reshape(Y,[-1,1])], axis =1)
         gaussian = tfp.distributions.MultivariateNormalDiag(loc=coords, scale_diag=tf.ones(tf.shape(coords),tf.float32)*self.sigma)
         prob = tf.reshape(gaussian.prob(idx),tf.shape(X))
-        return tf.expand_dims(prob,-1)
+        prob = tf.expand_dims(prob,0)
+        return tf.transpose(prob)
     
     def generate_heatmaps(self, coord_list):
         hm_list = tf.map_fn(self._generate_heatmap, coord_list)
-        paddings = [[0,self.n_landmarks-tf.shape(hm_list)[0]],[0,0],[0,0],[0,0]]
-        hm_list = tf.pad(hm_list, paddings , 'CONSTANT', 0.)
-        return hm_list#tf.stack(hm_list,axis=0)
+        paddings = [[0,self.n_landmarks-tf.shape(hm_list)[0]],[0,0],[0,0],[0,0]] # TODO maybe we can skip this
+        hm_list = tf.squeeze(tf.pad(hm_list, paddings , 'CONSTANT', 0.))
+        return hm_list#tf.squeeze(hm_list)#tf.stack(hm_list,axis=0)
 
