@@ -27,7 +27,7 @@ class Data_Loader():
     def __call__(self):
         im_size = [512, 512] # just define a standard value
         if self.name == 'droso':
-            im_size = [256, 304] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
+            im_size = [128, 125] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
             self.n_landmarks = 40
             self.load_droso()
             
@@ -52,10 +52,6 @@ class Data_Loader():
             self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
     def pre_process(self,im_size):
-
-        def check_keypoints(keypoints):
-            pass
-
         def convert_to_hm(keypoints):
             heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
             return heatmaps
@@ -72,7 +68,9 @@ class Data_Loader():
             image = np.array(transformed['image'],dtype=np.float32)
             keypoints = np.array(transformed['keypoints'],dtype=np.float32)
             if(len(image.shape)<3):
-                np.expand_dims(image,axis=-1)
+                image = np.expand_dims(image,axis=0)
+            elif(image.shape[0]!=1): #TODO feels wrong
+                image = np.expand_dims(np.squeeze(image),axis=0)#np.reshape(image,(1,image.shape[0],image.shape[1]))
             return image, keypoints
         
         def _albu_resize(image, keypoints):
@@ -81,7 +79,9 @@ class Data_Loader():
             image = np.array(transformed['image'],dtype=np.float32)
             keypoints = np.array(transformed['keypoints'],dtype=np.float32)
             if(len(image.shape)<3):
-                np.expand_dims(image,axis=-1)
+                image = np.expand_dims(image,axis=0)
+            elif(image.shape[0]!=1): 
+                image = np.expand_dims(np.squeeze(image),axis=0) # image = np.reshape(image,(1,image.shape[0],image.shape[1]))
             return image, keypoints
 
         def _augment(img, lab):
@@ -113,7 +113,6 @@ class Data_Loader():
         
         def process_path(file_path):
             img = decode_image(file_path)
-            # img = tf.expand_dims(img, -1)
             file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
             label = tf.strings.split(tf.io.read_file(PATH+self.name+'/400_senior/'+file_name+'.txt'),sep='\r\n')[:self.n_landmarks]
             label = tf.map_fn(lambda x: tf.strings.split(x,sep=','),label)
@@ -129,12 +128,15 @@ class Data_Loader():
         list_im = tf.data.Dataset.list_files(str(data_dir)+'*.jpg')
 
         def process_path(file_path):
-            
             img = decode_image(file_path)
             file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
             label = tf.strings.split(tf.io.read_file(PATH+self.name+'/raw/'+file_name+'.txt'), sep='\n')[:-1]
             label = tf.map_fn(lambda x: tf.strings.split(x, sep=' '), label)
             label = tf.strings.to_number(label, out_type=tf.dtypes.float32)
+            w,h = tf.split(label,2, axis=1)
+            w = tf.clip_by_value(w,0,3839)
+            h = tf.clip_by_value(h,0,3233)
+            label = tf.concat([w,h],axis=1)
             return img, label
 
         self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
