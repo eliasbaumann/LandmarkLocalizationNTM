@@ -9,7 +9,7 @@ parser = argparse.ArgumentParser()
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='TODO')
-parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
 
 # Model parameters
 parser.add_argument('--hidden_size', type=int, default=64, help='Size of LSTM hidden layer.')
@@ -28,7 +28,7 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=100000,
+parser.add_argument('--num_training_iterations', type=int, default=3000,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=100,
                         help='Iterations between reports (samples, valid loss).')
@@ -60,14 +60,23 @@ class dnc_model(tf.keras.Model):
         return output_sequence
         
 def loss_func(gt_labels, logits):
-    return 0
+    logit_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), logits)
+    gt_keypoints = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), gt_labels)
+    loss = tf.nn.l2_loss(gt_keypoints-logit_keypoints) / args.batch_size
+    return loss
+
+def get_max_indices(logits):
+    # coords = tf.cond(tf.equal(tf.reduce_max(logits), 0.),true_fn=lambda: tf.constant([0,0]),false_fn=lambda: tf.squeeze(tf.where(tf.equal(logits, tf.reduce_max(logits)))))
+    coords = tf.squeeze(tf.where(tf.equal(logits, tf.reduce_max(logits))))
+    coords = tf.cond(tf.greater(tf.rank(coords),tf.constant(1)),true_fn=lambda:tf.gather(coords,0),false_fn=lambda:coords)
+    return tf.cast(coords, tf.float32)
 
 def train_unet(num_training_iterations, report_interval):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset()
     iterator = iter(dataset.data)
-    samp_img, samp_label = next(iterator) # TODO do this via im_size from data
-    unet_model = unet.unet2d(32,2,[[2,2],[2,2],[2,2]],dataset.n_landmarks)
+    # samp_img, samp_label = next(iterator) # TODO do this via im_size from data
+    unet_model = unet.unet2d(16,2,[[2,2],[2,2],[2,2]],dataset.n_landmarks)
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     
     n_epochs = 3 # TODO
@@ -82,7 +91,7 @@ def train_unet(num_training_iterations, report_interval):
             optimizer.apply_gradients(zip(grads, unet_model.trainable_weights))
 
             if(iteration % report_interval == 0):
-                print(loss)
+                tf.print(loss)
 
 def train_dnc(num_training_iterations, report_interval):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
@@ -102,5 +111,12 @@ def train_dnc(num_training_iterations, report_interval):
             print(loss)
 
 if __name__ == "__main__":
+    # tf.config.experimental_run_functions_eagerly(True)
     # train_dnc(args.num_training_iterations, args.report_interval)
+    # tf.python.eager.profiler.start_profiler_server(6009)
+    # logdir = "C:\\Users\\Elias\\Desktop\\log"
+    # writer = tf.summary.create_file_writer(logdir)
+    # tf.summary.trace_on(graph=True, profiler=True)
     train_unet(args.num_training_iterations, args.report_interval)
+    # with writer.as_default():
+    #     tf.summary.trace_export(name="model_trace", step=0, profiler_outdir=logdir)
