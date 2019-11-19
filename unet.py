@@ -16,15 +16,26 @@ class unet2d(tf.keras.Model):
 def conv_pass(fmaps_in, kernel_size, num_fmaps, num_repetitions, activation=tf.keras.activations.relu, name='conv_pass'):
     fmaps = fmaps_in
     for i in range(num_repetitions):
-        fmaps = tf.keras.layers.Conv2D(filters=num_fmaps, kernel_size=kernel_size, padding='valid', data_format='channels_last', activation=activation, name=name+'_%i'%i)(fmaps) #TODO channels correct?
+        fmaps = tf.keras.layers.Conv2D(filters=num_fmaps, 
+                                       kernel_size=kernel_size, 
+                                       padding='same', 
+                                       data_format='channels_first', 
+                                       activation=activation, 
+                                       name=name+'_%i'%i)(fmaps)
     return fmaps
 
 def downsample(fmaps_in, factors, name='ds'):
-    fmaps = tf.keras.layers.MaxPool2D(pool_size=factors, strides=factors, padding='valid', data_format='channels_last', name=name)(fmaps_in)
+    fmaps = tf.keras.layers.MaxPool2D(pool_size=factors, strides=factors, padding='valid', data_format='channels_first', name=name)(fmaps_in)
     return fmaps
 
 def upsample(fmaps_in, factors, num_fmaps, activation=tf.keras.activations.relu, name='us'):
-    fmaps = tf.keras.layers.Conv2DTranspose(filters=num_fmaps, kernel_size=factors, strides=factors, padding='valid', data_format='channels_last', activation=activation, name=name)(fmaps_in)
+    fmaps = tf.keras.layers.Conv2DTranspose(filters=num_fmaps,
+                                            kernel_size=factors,
+                                            strides=factors,
+                                            padding='valid',
+                                            data_format='channels_first',
+                                            activation=activation,
+                                            name=name)(fmaps_in)
     return fmaps
 
 def crop_spatial(fmaps_in, shape):
@@ -38,7 +49,12 @@ def crop_spatial(fmaps_in, shape):
     return fmaps
 
 def unet(fmaps_in, num_fmaps, fmap_inc_factor, downsample_factors, activation=tf.keras.activations.relu, layer=0):
-    f_left = conv_pass(fmaps_in, kernel_size=3, num_fmaps=num_fmaps, num_repetitions=2, activation=activation, name='unet_left_%i'%layer)
+    f_left = conv_pass(fmaps_in,
+                       kernel_size=3,
+                       num_fmaps=num_fmaps,
+                       num_repetitions=2,
+                       activation=activation,
+                       name='unet_left_%i'%layer)
     
     # bottom layer:
     if (layer == len(downsample_factors)):
@@ -46,9 +62,17 @@ def unet(fmaps_in, num_fmaps, fmap_inc_factor, downsample_factors, activation=tf
     
     g_in = downsample(f_left, downsample_factors[layer])
 
-    g_out = unet(g_in, num_fmaps=num_fmaps*fmap_inc_factor, fmap_inc_factor=fmap_inc_factor, downsample_factors=downsample_factors, activation=activation, layer=layer+1)
+    g_out = unet(g_in, 
+                 num_fmaps=num_fmaps*fmap_inc_factor, 
+                 fmap_inc_factor=fmap_inc_factor, 
+                 downsample_factors=downsample_factors, 
+                 activation=activation, 
+                 layer=layer+1)
 
-    g_out_upsampled = upsample(g_out, factors = downsample_factors[layer],num_fmaps=num_fmaps, activation=activation)
+    g_out_upsampled = upsample(g_out,
+                               factors=downsample_factors[layer],
+                               num_fmaps=num_fmaps,
+                               activation=activation)
 
     f_left_cropped = crop_spatial(f_left, g_out_upsampled.get_shape().as_list())
 
