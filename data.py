@@ -20,6 +20,8 @@ class Data_Loader():
         self.repeat = repeat
         self.prefetch = prefetch
         self.data = None
+        self.val_data = None
+        self.test_data = None
         self.n_landmarks = None
         self.augmentations = []
         
@@ -35,23 +37,30 @@ class Data_Loader():
             im_size = [512, 413] # HW
             self.load_cephal()
         self.data = self.data.shuffle(buffer_size=128)
-        # TODO train test val split (take and skip)
-        # self.train_data = self.data.take(n_train_obs)
-        # self.test_data = self.data.skip(n_train_obs)
-        # self.val_data = self.test_data.take(n_val_obs)
-        # self.test_data = self.test_data.skip(n_val_obs)
+        
+        # train test val split (take and skip)
+        n_train_obs = 300 #total: 471
+        train_data = self.data.take(n_train_obs)
+        self.test_data = self.data.skip(n_train_obs)
+        self.val_data = self.test_data.take(self.batch_size)
+        self.test_data = self.test_data.skip(self.batch_size)
+        self.data = train_data
+
         self.pre_process(im_size)
 
         
         if self.repeat:
             self.data = self.data.repeat()
+            self.val_data = self.val_data.repeat()
         
         self.data = self.data.batch(self.batch_size, drop_remainder = True)
+        self.val_data = self.val_data.batch(self.batch_size, drop_remainder=True)
+
         
         if self.prefetch:
             self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
-    def pre_process(self,im_size):
+    def pre_process(self, im_size):
         def convert_to_hm(keypoints):
             heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
             return heatmaps
@@ -88,12 +97,16 @@ class Data_Loader():
             # img_dtype = img.dtype
             # img_shape = tf.shape(img)
             image, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
+            image.set_shape([1,im_size[0],im_size[1]])
             keypoints = convert_to_hm(keypoints)
+            keypoints.set_shape([40,im_size[0],im_size[1]])
             return image, keypoints
 
         def _resize(img, lab):
             image, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
+            image.set_shape([1,im_size[0],im_size[1]])
             keypoints = convert_to_hm(keypoints)
+            keypoints.set_shape([40,im_size[0],im_size[1]])
             return image, keypoints
 
         def generate_augmentations(images, keypoints):
@@ -103,8 +116,13 @@ class Data_Loader():
                 regular_ds.concatenate(aug_ds)
 
             return regular_ds
+        
+        def convert_all(images, keypoints):
+            return tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
 
         self.data = self.data.flat_map(generate_augmentations)
+        self.val_data = self.val_data.flat_map(convert_all)
+        self.test_data = self.test_data.flat_map(convert_all)
 
     def load_cephal(self):
         self.n_landmarks = 19
