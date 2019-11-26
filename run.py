@@ -1,4 +1,7 @@
 import tensorflow as tf
+import matplotlib.pyplot as plt
+import cv2
+
 import dnccell
 import data
 import unet
@@ -28,9 +31,9 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=3000,
+parser.add_argument('--num_training_iterations', type=int, default=100,
                         help='Number of iterations to train for.')
-parser.add_argument('--report_interval', type=int, default=100,
+parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
 parser.add_argument('--checkpoint_dir', type=str, default='/tmp/tf/dnc',
                        help='Checkpointing directory.')
@@ -38,6 +41,14 @@ parser.add_argument('--checkpoint_interval', type=int, default=-1,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
+
+def vis_points(image, points, diameter=10):
+    im = image.copy()
+
+    for (x, y) in points:
+        cv2.circle(im, (int(x), int(y)), diameter, (0, 255, 0), -1)
+
+    plt.imshow(im)
 
 class dnc_model(tf.keras.Model):
     def __init__(self, output_size):
@@ -58,11 +69,12 @@ class dnc_model(tf.keras.Model):
         initial_state = cell.initial_state(args.batch_size)
         output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True)(inputs, initial_state=initial_state)
         return output_sequence
-        
+
+# TODO: replace by pixelwise differnce
 def loss_func(gt_labels, logits):
-    logit_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), logits)
-    gt_keypoints = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), gt_labels)
-    loss = tf.nn.l2_loss(gt_keypoints-logit_keypoints) / args.batch_size
+    # logit_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), logits)
+    # gt_keypoints = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), gt_labels)
+    loss = tf.nn.l2_loss(gt_labels-logits) / args.batch_size
     return loss
 
 def get_max_indices(logits):
@@ -75,23 +87,44 @@ def train_unet(num_training_iterations, report_interval):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset()
     iterator = iter(dataset.data)
-    # samp_img, samp_label = next(iterator) # TODO do this via im_size from data
-    unet_model = unet.unet2d(16,2,[[2,2],[2,2],[2,2]],dataset.n_landmarks)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    val_iterator = iter(dataset.val_data)
+    test_iterator = iter(dataset.test_data)
+
+    # unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
+    unet_model = unet.convnet2d(128, dataset.n_landmarks)
+    # unet_model.build(tf.TensorShape([args.batch_size, dataset.n_landmarks, 128, 125]))
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     
-    n_epochs = 3 # TODO
+    n_epochs = 1 # TODO
 
-    for epoch in range(n_epochs):
-        for iteration in range(num_training_iterations):
-            img, label = next(iterator)
-            with tf.GradientTape() as tape:
-                logits = unet_model(img)
-                loss = loss_func(label, logits)
-            grads = tape.gradient(loss, unet_model.trainable_weights)
-            optimizer.apply_gradients(zip(grads, unet_model.trainable_weights))
+    unet_model.compile(optimizer, loss = loss_func)
+    unet_model.fit(x=dataset.data, epochs=n_epochs, validation_data = dataset.val_data, steps_per_epoch=num_training_iterations, validation_steps=1)
+    # for epoch in range(n_epochs):
+    #     for iteration in range(num_training_iterations):
+    #         img, label = next(iterator)
+    #         with tf.GradientTape() as tape:
+    #             logits = unet_model(img)
+    #             loss = loss_func(label, logits)
+    #         grads = tape.gradient(loss, unet_model.trainable_weights)
+    #         optimizer.apply_gradients(zip(grads, unet_model.trainable_weights)) #issue: trainable weights is empty
 
-            if(iteration % report_interval == 0):
-                tf.print(loss)
+    #         if(iteration % report_interval == 0):
+    #             img, label = next(val_iterator)
+    #             logits = unet_model(img)
+    #             val_loss = loss_func(label, logits)
+    #             tf.print('train_loss:')
+    #             tf.print(loss)
+    #             tf.print('val_loss:')
+    #             tf.print(val_loss)
+    #             tf.print('---------')
+    
+    img, label = next(iterator)
+    pred = unet_model(img)
+    pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
+    vis_points(img.numpy().squeeze()[0], tf.squeeze(pred_keypoints).numpy()[0],5)
+    plt.show()
+
 
 def train_dnc(num_training_iterations, report_interval):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
