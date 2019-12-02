@@ -22,11 +22,13 @@ class unet2d(tf.keras.Model):
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
         self.num_landmarks = num_landmarks
+        self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors)
+        self.logits = conv_pass(1, self.num_landmarks, 1, activation=None)
 
     def call(self, inputs):
-        unet_2d = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors)(inputs)
-        logits = conv_pass(1, self.num_landmarks, 1, activation=None)(unet_2d) # TODO payer et al do no activation ?
-        return logits
+        unet_2d = self.unet(inputs)
+        res = self.logits(unet_2d) # TODO payer et al do no activation ?
+        return res
 
 class unet(tf.keras.layers.Layer):
     def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, activation=tf.keras.activations.relu, layer=0, name='unet', **kwargs):
@@ -36,37 +38,52 @@ class unet(tf.keras.layers.Layer):
         self.downsample_factors = downsample_factors
         self.activation = activation
         self.layer = layer
-    
-    def call(self, inputs):
-        f_left = conv_pass(
+        self.inp_conv = conv_pass(
                        kernel_size=3,
                        num_fmaps=self.num_fmaps,
                        num_repetitions=2,
                        activation=self.activation,
-                       name='unet_left_%i'%self.layer)(inputs)
+                       name='unet_left_%i'%self.layer)
+        
+        if (self.layer < len(self.downsample_factors)):
+            self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor, 
+                            fmap_inc_factor=self.fmap_inc_factor, 
+                            downsample_factors=self.downsample_factors, 
+                            activation=self.activation, 
+                            layer=self.layer+1)
+            self.ds = downsample(factors=self.downsample_factors[self.layer])
+            self.us = upsample(factors=self.downsample_factors[self.layer],
+                                    num_fmaps=self.num_fmaps,
+                                    activation=self.activation)
+            self.crop = crop_spatial()
+            self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2)
+        else: 
+            self.unet_rec = None
+            self.ds = None
+            self.us = None
+            self.crop = None
+            self.out_conv = None
+
+        
+    
+    def call(self, inputs):
+        f_left = self.inp_conv(inputs)
         
         # bottom layer:
         if (self.layer == len(self.downsample_factors)):
             return f_left
-        
-        g_in = downsample(f_left, self.downsample_factors[self.layer])
+    
+        g_in = self.ds(f_left)
 
-        g_out = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor, 
-                    fmap_inc_factor=self.fmap_inc_factor, 
-                    downsample_factors=self.downsample_factors, 
-                    activation=self.activation, 
-                    layer=self.layer+1)(g_in)
+        g_out = self.unet_rec(g_in)
 
-        g_out_upsampled = upsample(g_out,
-                                factors=self.downsample_factors[self.layer],
-                                num_fmaps=self.num_fmaps,
-                                activation=self.activation)
+        g_out_upsampled = self.us(g_out)
 
-        f_left_cropped = crop_spatial(f_left, g_out_upsampled.get_shape().as_list())
+        f_left_cropped = self.crop(f_left,tf.shape(g_out_upsampled))
 
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
 
-        f_out = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2)(f_right)
+        f_out = self.out_conv(f_right)
 
         return f_out
 
@@ -88,6 +105,7 @@ class conv_pass(tf.keras.layers.Layer):
         for i in range(self.num_repetitions):
             inputs = self.conv[i](inputs)
         return inputs
+
 # def conv_pass(fmaps_in, kernel_size, num_fmaps, num_repetitions, activation=tf.keras.activations.relu, name='conv_pass'):
 #     fmaps = fmaps_in
 #     for i in range(num_repetitions):
@@ -99,29 +117,71 @@ class conv_pass(tf.keras.layers.Layer):
 #                                        name=name+'_%i'%i)(fmaps)
 #     return fmaps
 
-def downsample(fmaps_in, factors, name='ds'):
-    fmaps = tf.keras.layers.MaxPool2D(pool_size=factors, strides=factors, padding='valid', data_format='channels_first', name=name)(fmaps_in)
-    return fmaps
+class downsample(tf.keras.layers.Layer):
+    def __init__(self, factors, name='ds', **kwargs):
+        super(downsample, self).__init__(name = name, **kwargs)
+        self.factors = factors
+        self.ds = tf.keras.layers.MaxPool2D(pool_size=self.factors, strides=self.factors, padding='same', data_format='channels_first', name=self.name)
+    
+    
+    def call(self, inputs):
+        inputs = self.ds(inputs)
+        return inputs
 
-def upsample(fmaps_in, factors, num_fmaps, activation=tf.keras.activations.relu, name='us'):
-    fmaps = tf.keras.layers.Conv2DTranspose(filters=num_fmaps,
-                                            kernel_size=factors,
-                                            strides=factors,
+
+# def downsample(fmaps_in, factors, name='ds'):
+#     fmaps = tf.keras.layers.MaxPool2D(pool_size=factors, strides=factors, padding='valid', data_format='channels_first', name=name)(fmaps_in)
+#     return fmaps
+
+class upsample(tf.keras.layers.Layer):
+    def __init__(self, factors, num_fmaps, activation=tf.keras.activations.relu, name='us', **kwargs):
+        super(upsample, self).__init__(name=name, *kwargs)
+        self.factors = factors
+        self.num_fmaps = num_fmaps
+        self.activation = activation
+        self.us = tf.keras.layers.Conv2DTranspose(filters=self.num_fmaps,
+                                            kernel_size=self.factors,
+                                            strides=self.factors,
                                             padding='valid',
                                             data_format='channels_first',
-                                            activation=activation,
-                                            name=name)(fmaps_in)
-    return fmaps
+                                            activation=self.activation,
+                                            name=self.name)
 
-def crop_spatial(fmaps_in, shape):
-    in_shape = fmaps_in.get_shape().as_list()
+    def call(self, inputs):
+        inputs = self.us(inputs)
+        return inputs
 
-    offset = [0, 0] + [(in_shape[i] - shape[i]) // 2 for i in range(2, len(shape))]
-    size = in_shape[0:2] + shape[2:]
+# def upsample(fmaps_in, factors, num_fmaps, activation=tf.keras.activations.relu, name='us'):
+#     fmaps = tf.keras.layers.Conv2DTranspose(filters=num_fmaps,
+#                                             kernel_size=factors,
+#                                             strides=factors,
+#                                             padding='valid',
+#                                             data_format='channels_first',
+#                                             activation=activation,
+#                                             name=name)(fmaps_in)
+#     return fmaps
 
-    fmaps = tf.slice(fmaps_in, offset, size)
+class crop_spatial(tf.keras.layers.Layer):
+    def __init__(self):
+        super(crop_spatial, self).__init__(name='crop_spatial')
+        
+    
+    def call(self, inputs, shape):
+        in_shape = tf.shape(inputs)
+        offset = [0,0] + [(in_shape[i] - shape[i]) // 2 for i in range(2, shape.shape[0])]
+        size = tf.concat([in_shape[0:2],shape[2:]],0)
+        inputs = tf.slice(inputs, offset, size)
+        return inputs
 
-    return fmaps
+# def crop_spatial(fmaps_in, shape):
+#     in_shape = fmaps_in.get_shape().as_list()
+
+#     offset = [0, 0] + [(in_shape[i] - shape[i]) // 2 for i in range(2, len(shape))]
+#     size = in_shape[0:2] + shape[2:]
+
+#     fmaps = tf.slice(fmaps_in, offset, size)
+
+#     return fmaps
 
 # def unet(fmaps_in, num_fmaps, fmap_inc_factor, downsample_factors, activation=tf.keras.activations.relu, layer=0):
 #     f_left = conv_pass(fmaps_in,

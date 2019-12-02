@@ -9,3 +9,5 @@ __pycache__/unet.cpython-36.pyc
 Meta landmark learning.txt
 __pycache__/heatmapgen.cpython-36.pyc
 __pycache__/run.cpython-36.pyc
+__pycache__/net_tests.cpython-36.pyc
+__pycache__/tests.cpython-36.pyc

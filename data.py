@@ -29,7 +29,7 @@ class Data_Loader():
     def __call__(self):
         im_size = [512, 512] # just define a standard value
         if self.name == 'droso':
-            im_size = [128, 125] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
+            im_size = [256, 256] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
             self.n_landmarks = 40
             self.load_droso()
             
@@ -42,8 +42,8 @@ class Data_Loader():
         n_train_obs = 300 #total: 471
         train_data = self.data.take(n_train_obs)
         self.test_data = self.data.skip(n_train_obs)
-        self.val_data = self.test_data.take(self.batch_size)
-        self.test_data = self.test_data.skip(self.batch_size)
+        self.val_data = self.test_data.take(self.batch_size*2)
+        self.test_data = self.test_data.skip(self.batch_size*2)
         self.data = train_data
 
         self.pre_process(im_size)

@@ -12,7 +12,7 @@ parser = argparse.ArgumentParser()
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='TODO')
-parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
 
 # Model parameters
 parser.add_argument('--hidden_size', type=int, default=64, help='Size of LSTM hidden layer.')
@@ -31,7 +31,7 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=100,
+parser.add_argument('--num_training_iterations', type=int, default=1000,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -90,16 +90,16 @@ def train_unet(num_training_iterations, report_interval):
     val_iterator = iter(dataset.val_data)
     test_iterator = iter(dataset.test_data)
 
-    # unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
-    unet_model = unet.convnet2d(128, dataset.n_landmarks)
+    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
+    #unet_model = unet.convnet2d(128, dataset.n_landmarks)
     # unet_model.build(tf.TensorShape([args.batch_size, dataset.n_landmarks, 128, 125]))
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     
-    n_epochs = 1 # TODO
+    n_epochs = 5 # TODO
 
     unet_model.compile(optimizer, loss = loss_func)
-    unet_model.fit(x=dataset.data, epochs=n_epochs, validation_data = dataset.val_data, steps_per_epoch=num_training_iterations, validation_steps=1)
+    unet_model.fit(x=dataset.data, epochs=n_epochs, validation_data = dataset.val_data, steps_per_epoch=num_training_iterations//n_epochs, validation_steps=1) #TODO ntraining epochs
     # for epoch in range(n_epochs):
     #     for iteration in range(num_training_iterations):
     #         img, label = next(iterator)
@@ -118,12 +118,12 @@ def train_unet(num_training_iterations, report_interval):
     #             tf.print('val_loss:')
     #             tf.print(val_loss)
     #             tf.print('---------')
-    
-    img, label = next(iterator)
-    pred = unet_model(img)
-    pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
-    vis_points(img.numpy().squeeze()[0], tf.squeeze(pred_keypoints).numpy()[0],5)
-    plt.show()
+    for _ in range(5):
+        img, label = next(iterator)
+        pred = unet_model.predict(img)
+        pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
+        vis_points(img.numpy().squeeze()[0], tf.squeeze(pred_keypoints).numpy()[0],5)
+        plt.show()
 
 
 def train_dnc(num_training_iterations, report_interval):
