@@ -3,14 +3,16 @@ import tensorflow as tf
 import albumentations as albu
 import numpy as np
 from heatmapgen import Heatmap_Generator
+import matplotlib.pyplot as plt
 
 PATH = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
 
 
 def decode_image(file_path):
     img = tf.io.read_file(file_path)
-    img = tf.io.decode_image(img)
-    img = tf.image.convert_image_dtype(img, tf.float32)
+    img = tf.io.decode_image(img, dtype= tf.dtypes.float32)
+    img = tf.image.per_image_standardization(img)
+    # img = tf.subtract(tf.scalar_mul(tf.constant(2., dtype=tf.float32), img),tf.constant(1., dtype=tf.float32))
     return img
 
 class Data_Loader():
@@ -79,7 +81,7 @@ class Data_Loader():
             if(len(image.shape)<3):
                 image = np.expand_dims(image,axis=0)
             elif(image.shape[0]!=1): #TODO feels wrong
-                image = np.expand_dims(np.squeeze(image),axis=0)#np.reshape(image,(1,image.shape[0],image.shape[1]))
+                image = np.expand_dims(np.squeeze(image),axis=0)
             return image, keypoints
         
         def _albu_resize(image, keypoints):
@@ -159,4 +161,3 @@ class Data_Loader():
 
         self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         #self.im_size = decode_image(str(PATH+self.name+'/images/NG-SP196-909-0001.jpg')).shape
-
