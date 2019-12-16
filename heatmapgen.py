@@ -21,7 +21,7 @@ class Heatmap_Generator(object):
         prob = tf.reshape(gaussian.prob(idx),tf.shape(X))
         #prob = self._rescale(prob, .001)
         prob = tf.expand_dims(prob,0)
-        return tf.transpose(prob)
+        return prob 
     
     def generate_heatmaps(self, coord_list):
         hm_list = tf.map_fn(self._generate_heatmap, coord_list)
