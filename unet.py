@@ -1,5 +1,8 @@
 import tensorflow as tf
 
+# TODO: Tasks 
+# - Dropout layer in second to last
+# - fixed upsampling instead of deconv?? Is in, but needs tryiing
 
 class convnet2d(tf.keras.Model):
     def __init__(self, num_fmaps, num_landmarks, name='convnet2d', **kwargs):
@@ -38,23 +41,23 @@ class unet(tf.keras.layers.Layer):
         self.downsample_factors = downsample_factors
         self.activation = activation
         self.layer = layer
-        self.inp_conv = conv_pass(
-                       kernel_size=3,
-                       num_fmaps=self.num_fmaps,
-                       num_repetitions=2,
-                       activation=self.activation,
-                       name='unet_left_%i'%self.layer)
-        
-        if (self.layer < len(self.downsample_factors)):
-            self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor, 
-                            fmap_inc_factor=self.fmap_inc_factor, 
-                            downsample_factors=self.downsample_factors, 
-                            activation=self.activation, 
-                            layer=self.layer+1)
+        self.inp_conv = conv_pass(kernel_size=3,
+                                  num_fmaps=self.num_fmaps,
+                                  num_repetitions=2,
+                                  activation=self.activation,
+                                  name='unet_left_%i'%self.layer)
+        self.drop = tf.keras.layers.Dropout(.2,seed=42)
+
+        if self.layer < len(self.downsample_factors):
+            self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor,
+                                 fmap_inc_factor=self.fmap_inc_factor,
+                                 downsample_factors=self.downsample_factors,
+                                 activation=self.activation,
+                                 layer=self.layer+1)
             self.ds = downsample(factors=self.downsample_factors[self.layer])
             self.us = upsample(factors=self.downsample_factors[self.layer],
-                                    num_fmaps=self.num_fmaps,
-                                    activation=self.activation)
+                               num_fmaps=self.num_fmaps,
+                               activation=self.activation)
             self.crop = crop_spatial()
             self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2)
         else: 
@@ -64,17 +67,19 @@ class unet(tf.keras.layers.Layer):
             self.crop = None
             self.out_conv = None
 
-        
-    
     def call(self, inputs):
         f_left = self.inp_conv(inputs)
         # bottom layer:
-        if (self.layer == len(self.downsample_factors)):
+        if self.layer == len(self.downsample_factors):
+            f_left = self.drop(f_left)
             return f_left
+        # to add dropout to second to last layer as well: 
+        elif self.layer == len(self.downsample_factors)-1:
+            f_left = self.drop(f_left)
         g_in = self.ds(f_left)
         g_out = self.unet_rec(g_in)
         g_out_upsampled = self.us(g_out)
-        f_left_cropped = self.crop(f_left,tf.shape(g_out_upsampled))
+        f_left_cropped = self.crop(f_left, tf.shape(g_out_upsampled))
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
         f_out = self.out_conv(f_right)
         return f_out
@@ -102,7 +107,7 @@ class downsample(tf.keras.layers.Layer):
     def __init__(self, factors, name='ds', **kwargs):
         super(downsample, self).__init__(name = name, **kwargs)
         self.factors = factors
-        self.ds = tf.keras.layers.MaxPool2D(pool_size=self.factors, strides=self.factors, padding='same', data_format='channels_first', name=self.name)
+        self.ds = tf.keras.layers.AveragePooling2D(pool_size=self.factors, strides=self.factors, padding='same', data_format='channels_first', name=self.name)
     
     
     def call(self, inputs):
@@ -115,13 +120,14 @@ class upsample(tf.keras.layers.Layer):
         self.factors = factors
         self.num_fmaps = num_fmaps
         self.activation = activation
-        self.us = tf.keras.layers.Conv2DTranspose(filters=self.num_fmaps,
-                                            kernel_size=self.factors,
-                                            strides=self.factors,
-                                            padding='valid',
-                                            data_format='channels_first',
-                                            activation=self.activation,
-                                            name=self.name)
+        # self.us = tf.keras.layers.Conv2DTranspose(filters=self.num_fmaps,
+        #                                     kernel_size=self.factors,
+        #                                     strides=self.factors,
+        #                                     padding='valid',
+        #                                     data_format='channels_first',
+        #                                     activation=self.activation,
+        #                                     name=self.name)
+        self.us = tf.keras.layers.UpSampling2D(size=self.factors, data_format = "channels_first")
 
     def call(self, inputs):
         inputs = self.us(inputs)
