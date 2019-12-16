@@ -26,12 +26,12 @@ parser.add_argument('--clip_value', type=int, default=20,
 
 # Optimizer parameters.
 parser.add_argument('--max_grad_norm', type=float, default=50, help='Gradient clipping norm limit.')
-parser.add_argument('--learning_rate', type=float, default=1e-4, help='Optimizer learning rate.')
+parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer learning rate.')
 parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=100,
+parser.add_argument('--num_training_iterations', type=int, default=500,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -42,11 +42,12 @@ parser.add_argument('--checkpoint_interval', type=int, default=-1,
 
 args = parser.parse_args()
 
-def vis_points(image, points, diameter=10):
+def vis_points(image, points, diameter=5):
     im = image.copy()
+    im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
 
-    for (x, y) in points:
-        cv2.circle(im, (int(x), int(y)), diameter, (0, 255, 0), -1)
+    for (y, x) in points:
+        cv2.circle(im, (int(x), int(y)), diameter, (255, 0, 0), -1)
 
     plt.imshow(im)
 
@@ -92,12 +93,17 @@ def train_unet(num_training_iterations, report_interval):
     # unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
     unet_model = unet.convnet2d(128, dataset.n_landmarks)
 
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     
-    n_epochs = 5 # TODO
-
-    unet_model.compile(optimizer, loss = tf.keras.losses.MeanSquaredError(), metrics= [coord_dist])
-    unet_model.fit(x=dataset.data, epochs=n_epochs, validation_data = dataset.val_data, steps_per_epoch=num_training_iterations//n_epochs, validation_steps=1) #TODO ntraining epochs
+    n_epochs = 20 # TODO
+    tb_callback = tf.keras.callbacks.TensorBoard(log_dir='C:\\Users\\Elias\\Desktop\\MA_logs')
+    unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
+    unet_model.fit(x=dataset.data,
+                   epochs=n_epochs,
+                   validation_data=dataset.val_data,
+                   steps_per_epoch=num_training_iterations//n_epochs,
+                   validation_steps=1,
+                   callbacks=[tb_callback]) 
     # for epoch in range(n_epochs):
     #     for iteration in range(num_training_iterations):
     #         img, label = next(iterator)
