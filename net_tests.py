@@ -20,11 +20,12 @@ if __name__ == "__main__":
     dataset = Data_Loader('droso',8)
     dataset()
     iterator = iter(dataset.data)
-    
-    image, keypoints = next(iterator)
-    
-    im2 = image[0].numpy().squeeze()
-    hm2 = np.sum(keypoints[0].numpy().squeeze(),axis=0)
-    keyp = tf.map_fn(lambda x: tf.map_fn(get_max_indices,x), keypoints)[0].numpy()
-    vis_points(im2, keyp)
-    plt.show()
+    for _ in range(5):
+            
+        image, keypoints = next(iterator)
+        
+        im2 = image[0].numpy().squeeze()
+        hm2 = np.sum(keypoints[0].numpy().squeeze(),axis=0)
+        keyp = tf.map_fn(lambda x: tf.map_fn(get_max_indices,x), keypoints)[0].numpy()
+        vis_points(im2, keyp)
+        plt.show()
