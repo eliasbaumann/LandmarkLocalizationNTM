@@ -28,15 +28,12 @@ class Data_Loader():
         self.augmentations = []
         
 
-    def __call__(self):
-        im_size = [512, 512] # just define a standard value
+    def __call__(self, im_size = [256,256]):
         if self.name == 'droso':
-            im_size = [256, 256] # set one value to 512 and rounded the other -> images will be minimally stretched (HW)
             self.n_landmarks = 40
             self.load_droso()
             
         elif self.name == 'cephal':
-            im_size = [512, 413] # HW
             self.load_cephal()
         
         self.resize_images(im_size)

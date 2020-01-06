@@ -12,7 +12,7 @@ import os
 parser = argparse.ArgumentParser()
 
 # Task
-parser.add_argument('--dataset', type=str, default='droso', help='TODO')
+parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
 parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
 
 # Model parameters
@@ -32,7 +32,7 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=800,
+parser.add_argument('--num_training_iterations', type=int, default=1000,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -76,7 +76,6 @@ class dnc_model(tf.keras.Model):
         output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True)(inputs, initial_state=initial_state)
         return output_sequence
 
-# TODO: replace by pixelwise differnce
 def loss_func(gt_labels, logits):
     loss = tf.nn.l2_loss(gt_labels-logits) / args.batch_size
     return loss
@@ -113,14 +112,14 @@ def predict_from_cp():
         vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5)
         plt.show()
 
-def train_unet(num_training_iterations, report_interval):
+def train_unet(num_training_iterations):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset()
     unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
     #unet_model = unet.convnet2d(128, dataset.n_landmarks)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)    
-    n_epochs = 40 # TODO
-    tb_callback = tf.keras.callbacks.TensorBoard(LOG_PATH=LOG_PATH)
+    n_epochs = 50 # TODO
+    tb_callback = tf.keras.callbacks.TensorBoard(log_dir=LOG_PATH)
     cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=CP_PATH,verbose=1, save_weights_only=True, save_freq=args.checkpoint_interval*args.batch_size*num_training_iterations//n_epochs) #ugly way of saving every 5 epochs :)
     unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
     unet_model.save_weights(CP_PATH.format(epoch=0))
@@ -181,5 +180,5 @@ def train_dnc(num_training_iterations, report_interval):
 
 if __name__ == "__main__":
     # train_dnc(args.num_training_iterations, args.report_interval)
-    # train_unet(args.num_training_iterations, args.report_interval)
-    predict_from_cp()
+    train_unet(args.num_training_iterations)
+    # predict_from_cp()
