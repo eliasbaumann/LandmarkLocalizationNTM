@@ -38,6 +38,8 @@ class Data_Loader():
         elif self.name == 'cephal':
             im_size = [512, 413] # HW
             self.load_cephal()
+        
+        self.resize_images(im_size)
         self.data = self.data.shuffle(buffer_size=128)
         
         # train test val split (take and skip)
@@ -48,7 +50,7 @@ class Data_Loader():
         self.test_data = self.test_data.skip(self.batch_size*2)
         self.data = train_data
 
-        self.pre_process(im_size)
+        self.augment_data(im_size)
 
         
         if self.repeat:
@@ -62,28 +64,18 @@ class Data_Loader():
         if self.prefetch:
             self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
-    def pre_process(self, im_size):
-        def convert_to_hm(keypoints):
+    def convert_to_hm(self, keypoints, im_size):
             heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
             return heatmaps
 
-        def _albu_transform(image, keypoints):
-            transformed = albu.Compose([albu.Resize(im_size[0],im_size[1]),
-                                        albu.Flip(p=.5),
-                                        albu.RandomSizedCrop((int(.3*im_size[0]),int(.9*im_size[0])),im_size[0],
-                                                              im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
-                                        albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5),
-                                        albu.RandomBrightnessContrast(brightness_limit=.2,contrast_limit=.2,p=.5)],
-                                       p=1,
-                                       keypoint_params=albu.KeypointParams(format='xy',remove_invisible=True))(image=image, keypoints=keypoints)
-            image = np.array(transformed['image'],dtype=np.float32)
-            keypoints = np.array(transformed['keypoints'],dtype=np.float32)
-            if(len(image.shape)<3):
-                image = np.expand_dims(image,axis=0)
-            elif(image.shape[0]!=1): #TODO feels wrong
-                image = np.expand_dims(np.squeeze(image),axis=0)
+    def resize_images(self, im_size):   
+        def _resize(img, lab):
+            image, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
+            image.set_shape([1,im_size[0],im_size[1]])
+            keypoints = self.convert_to_hm(keypoints, im_size)
+            keypoints.set_shape([40,im_size[0],im_size[1]])
             return image, keypoints
-        
+
         def _albu_resize(image, keypoints):
             transformed = albu.Compose([albu.Resize(im_size[0], im_size[1])], 
                                        p=1, keypoint_params=albu.KeypointParams(format='xy',remove_invisible=True))(image=image, keypoints=keypoints)
@@ -94,37 +86,50 @@ class Data_Loader():
             elif(image.shape[0]!=1): 
                 image = np.expand_dims(np.squeeze(image),axis=0) # image = np.reshape(image,(1,image.shape[0],image.shape[1]))
             return image, keypoints
+        
+        def convert_all(images, keypoints):
+            return tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
+
+        self.data = self.data.flat_map(convert_all)
+
+    def augment_data(self, im_size):
+        def _albu_transform(image, keypoints):
+            image = np.stack((image,keypoints),axis=0)
+            transformed = albu.Compose([albu.Resize(im_size[0],im_size[1]),
+                                        albu.Flip(p=.5),
+                                        albu.RandomSizedCrop((int(.3*im_size[0]),int(.9*im_size[0])),im_size[0],
+                                                              im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
+                                        albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5),
+                                        albu.RandomBrightnessContrast(brightness_limit=.2,contrast_limit=.2,p=.5)],
+                                       p=1)(image=image)
+            image = np.array(transformed['image'][0],dtype=np.float32)
+            keypoints = np.array(transformed['image'][1:],dtype=np.float32)
+            #keypoints = np.array(transformed['keypoints'],dtype=np.float32)
+            if(len(image.shape)<3):
+                image = np.expand_dims(image,axis=0)
+            elif(image.shape[0]!=1): #TODO feels wrong
+                image = np.expand_dims(np.squeeze(image),axis=0)
+            return image, keypoints
+          
 
         def _augment(img, lab):
             # img_dtype = img.dtype
             # img_shape = tf.shape(img)
             image, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
             image.set_shape([1,im_size[0],im_size[1]])
-            keypoints = convert_to_hm(keypoints)
+            keypoints = self.convert_to_hm(keypoints, im_size)
             keypoints.set_shape([40,im_size[0],im_size[1]])
             return image, keypoints
 
-        def _resize(img, lab):
-            image, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
-            image.set_shape([1,im_size[0],im_size[1]])
-            keypoints = convert_to_hm(keypoints)
-            keypoints.set_shape([40,im_size[0],im_size[1]])
-            return image, keypoints
 
         def generate_augmentations(images, keypoints):
-            regular_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
+            regular_ds = tf.data.Dataset.from_tensors((images,keypoints))
             for _ in range(3): # TODO this is how many rounds of additional images
                 aug_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_augment)
                 regular_ds.concatenate(aug_ds)
-
             return regular_ds
         
-        def convert_all(images, keypoints):
-            return tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
-
         self.data = self.data.flat_map(generate_augmentations)
-        self.val_data = self.val_data.flat_map(convert_all)
-        self.test_data = self.test_data.flat_map(convert_all)
 
     def load_cephal(self):
         self.n_landmarks = 19
