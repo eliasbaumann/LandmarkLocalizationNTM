@@ -40,14 +40,14 @@ class Data_Loader():
             self.load_cephal()
         
         self.resize_images(im_size)
-        self.data = self.data.shuffle(buffer_size=128)
+        #self.data = self.data.shuffle(buffer_size=256) #TODO add this for actual runs, 
         
         # train test val split (take and skip)
-        n_train_obs = 300 #total: 471
+        n_train_obs = 352 #total: 471 , chose on dividable by batchsize (8 currently)
         train_data = self.data.take(n_train_obs)
         self.test_data = self.data.skip(n_train_obs)
-        self.val_data = self.test_data.take(self.batch_size*2)
-        self.test_data = self.test_data.skip(self.batch_size*2)
+        self.val_data = self.test_data.take(self.batch_size*4)
+        self.test_data = self.test_data.skip(self.batch_size*4)
         self.data = train_data
 
         self.augment_data(im_size)
@@ -95,12 +95,11 @@ class Data_Loader():
     def augment_data(self, im_size):
         def _albu_transform(image, keypoints):
             image = np.stack((image,keypoints),axis=0)
-            transformed = albu.Compose([albu.Resize(im_size[0],im_size[1]),
+            transformed = albu.Compose([albu.ElasticTransform(p=.5),
                                         albu.Flip(p=.5),
-                                        albu.RandomSizedCrop((int(.3*im_size[0]),int(.9*im_size[0])),im_size[0],
+                                        albu.RandomSizedCrop((int(.5*im_size[0]),int(.9*im_size[0])),im_size[0],
                                                               im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
-                                        albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5),
-                                        albu.RandomBrightnessContrast(brightness_limit=.2,contrast_limit=.2,p=.5)],
+                                        albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5)],
                                        p=1)(image=image)
             image = np.array(transformed['image'][0],dtype=np.float32)
             keypoints = np.array(transformed['image'][1:],dtype=np.float32)
@@ -124,7 +123,7 @@ class Data_Loader():
 
         def generate_augmentations(images, keypoints):
             regular_ds = tf.data.Dataset.from_tensors((images,keypoints))
-            for _ in range(3): # TODO this is how many rounds of additional images
+            for _ in range(5): # TODO this is how many rounds of additional images
                 aug_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_augment)
                 regular_ds.concatenate(aug_ds)
             return regular_ds
