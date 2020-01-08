@@ -25,15 +25,17 @@ class Data_Loader():
         self.val_data = None
         self.test_data = None
         self.n_landmarks = None
+        self.keypoints = None
         self.augmentations = []
         
 
-    def __call__(self, im_size = [256,256]):
+    def __call__(self, im_size = [256,256], keypoints=None):
         if self.name == 'droso':
             self.n_landmarks = 40
             self.load_droso()
             
         elif self.name == 'cephal':
+            self.n_landmarks = 19
             self.load_cephal()
         
         self.resize_images(im_size)
@@ -49,6 +51,8 @@ class Data_Loader():
 
         self.augment_data(im_size)
 
+        if self.keypoints is not None:
+            self.kp_to_input(self.keypoints)
         
         if self.repeat:
             self.data = self.data.repeat()
@@ -98,7 +102,7 @@ class Data_Loader():
                                                               im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
                                         albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5)],
                                        p=1)(image=image)
-            image = np.array(transformed['image'][0],dtype=np.float32)
+            image = np.array(transformed['image'][0:1],dtype=np.float32)
             keypoints = np.array(transformed['image'][1:],dtype=np.float32)
             #keypoints = np.array(transformed['keypoints'],dtype=np.float32)
             if(len(image.shape)<3):
@@ -126,6 +130,29 @@ class Data_Loader():
             return regular_ds
         
         self.data = self.data.flat_map(generate_augmentations)
+
+    
+    def kp_to_input(self, kp_list):
+        """
+        This function allows to input keypoints into the model 
+        by selecting with a list, always starting with 0 
+        i.e. [0,1,14,22] or [0,2,4,5]
+        """
+        inv_kp_list = np.repeat(True, 3)
+        inv_kp_list[kp_list] = False
+        inv_kp_list = [i for i, j in enumerate(inv_kp_list, start=0) if j]
+        kp_list = tf.constant(kp_list)
+        inv_kp_list = tf.constant(inv_kp_list)
+
+        def resplit(images, keypoints):
+            params = tf.concat([images, keypoints], axis=0)
+            inp = tf.gather(params, kp_list, axis=0)
+            lab = tf.gather(params, inv_kp_list, axis=0)
+            return inp, lab
+
+        self.data = self.data.flat_map(resplit)
+        self.val_data = self.val_data.flat_map(resplit)
+        self.test_data = self.test_data.flat_map(resplit)
 
     def load_cephal(self):
         self.n_landmarks = 19

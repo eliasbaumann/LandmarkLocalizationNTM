@@ -32,7 +32,7 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=1000,
+parser.add_argument('--num_training_iterations', type=int, default=10,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -47,13 +47,15 @@ LOG_PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
 CP_PATH = LOG_PATH+'\\models\\cp-{epoch:04d}.ckpt'
 CP_DIR = os.path.dirname(CP_PATH)
 
-def vis_points(image, points, diameter=5):
+def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy()
     im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
 
     for (y, x) in points:
         cv2.circle(im, (int(x), int(y)), diameter, (255, 0, 0), -1)
-
+    if given_kp is not None:
+        for (y,x) in given_kp:
+            cv2.circle(im, (int(x), int(y)), diameter, (0, 255, 0), -1)
     plt.imshow(im)
 
 class dnc_model(tf.keras.Model):
@@ -91,7 +93,24 @@ def get_max_indices(logits):
     coords = tf.cond(tf.greater(tf.rank(coords),tf.constant(1)),true_fn=lambda:tf.gather(coords,0),false_fn=lambda:coords)
     return tf.cast(coords, tf.float32)
 
-def predict_from_cp():
+def vis_results(img,label,model,kp_list):
+    given_kp = None
+    if kp_list is not None:
+        img = tf.gather(img, tf.constant(0))
+        given_kp = tf.gather(img, tf.constant(range(1,len(kp_list))))
+        given_kp = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), given_kp)
+    img = tf.expand_dims(img, 0)
+
+    label = tf.expand_dims(label, 0)
+    pred = model.predict(img)
+    pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
+    lab_kp = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), label)
+    vis_points(img.numpy().squeeze(), pred_keypoints.numpy()[0], 5, given_kp)
+    plt.show()
+    vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5)
+    plt.show()
+
+def predict_from_cp(kp_list=None):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset()
     latest = tf.train.latest_checkpoint(CP_DIR)
@@ -102,23 +121,15 @@ def predict_from_cp():
     iterator = iter(dataset.test_data)
     for _ in range(5):
         img, label = next(iterator)
-        img = tf.expand_dims(img, 0)
-        label = tf.expand_dims(label, 0)
-        pred = unet_model.predict(img)
-        pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
-        lab_kp = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), label)
-        vis_points(img.numpy().squeeze(), pred_keypoints.numpy()[0],5)
-        plt.show()
-        vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5)
-        plt.show()
+        vis_results(img, label, unet_model,kp_list)
 
-def train_unet(num_training_iterations):
+def train_unet(num_training_iterations, kp_list=None):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset()
-    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
+    dataset(keypoints=kp_list)
+    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1))
     #unet_model = unet.convnet2d(128, dataset.n_landmarks)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)    
-    n_epochs = 50 # TODO
+    n_epochs = 2 # TODO
     tb_callback = tf.keras.callbacks.TensorBoard(log_dir=LOG_PATH)
     cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=CP_PATH,verbose=1, save_weights_only=True, save_freq=args.checkpoint_interval*args.batch_size*num_training_iterations//n_epochs) #ugly way of saving every 5 epochs :)
     unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
@@ -129,36 +140,10 @@ def train_unet(num_training_iterations):
                    steps_per_epoch=num_training_iterations//n_epochs,
                    validation_steps=1,
                    callbacks=[tb_callback, cp_callback]) 
-    # for epoch in range(n_epochs):
-    #     for iteration in range(num_training_iterations):
-    #         img, label = next(iterator)
-    #         with tf.GradientTape() as tape:
-    #             logits = unet_model(img)
-    #             loss = loss_func(label, logits)
-    #         grads = tape.gradient(loss, unet_model.trainable_weights)
-    #         optimizer.apply_gradients(zip(grads, unet_model.trainable_weights)) #issue: trainable weights is empty
-
-    #         if(iteration % report_interval == 0):
-    #             img, label = next(val_iterator)
-    #             logits = unet_model(img)
-    #             val_loss = coord_dist(label, logits)
-    #             tf.print('train_loss:')
-    #             tf.print(loss)
-    #             tf.print('val_loss:')
-    #             tf.print(val_loss)
-    #             tf.print('---------')
     iterator = iter(dataset.test_data)
     for _ in range(5):
         img, label = next(iterator)
-        img = tf.expand_dims(img, 0)
-        label = tf.expand_dims(label, 0)
-        pred = unet_model.predict(img)
-        pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
-        lab_kp = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), label)
-        vis_points(img.numpy().squeeze(), pred_keypoints.numpy()[0],5)
-        plt.show()
-        vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5)
-        plt.show()
+        vis_results(img, label, unet_model,kp_list)
 
 
 def train_dnc(num_training_iterations, report_interval):
@@ -180,5 +165,5 @@ def train_dnc(num_training_iterations, report_interval):
 
 if __name__ == "__main__":
     # train_dnc(args.num_training_iterations, args.report_interval)
-    train_unet(args.num_training_iterations)
+    train_unet(args.num_training_iterations, kp_list = [0,1,2])
     # predict_from_cp()

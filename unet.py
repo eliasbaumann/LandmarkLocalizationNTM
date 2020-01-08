@@ -1,7 +1,6 @@
 import tensorflow as tf
 
 # TODO: Tasks 
-# - Dropout layer in second to last
 # - fixed upsampling instead of deconv?? Is in, but needs tryiing
 
 class convnet2d(tf.keras.Model):
