@@ -31,17 +31,16 @@ class Data_Loader():
 
     def __call__(self, im_size = [256,256], keypoints=None):
         if self.name == 'droso':
-            self.n_landmarks = 40
             self.load_droso()
             
         elif self.name == 'cephal':
-            self.n_landmarks = 19
             self.load_cephal()
         
         self.resize_images(im_size)
         #self.data = self.data.shuffle(buffer_size=256) #TODO add this for actual runs, 
         
         # train test val split (take and skip)
+        # TODO this is specific for droso:
         n_train_obs = 352 #total: 471 , chose on dividable by batchsize (8 currently)
         train_data = self.data.take(n_train_obs)
         self.test_data = self.data.skip(n_train_obs)
