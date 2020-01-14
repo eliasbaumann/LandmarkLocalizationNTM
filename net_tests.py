@@ -18,7 +18,7 @@ def vis_points(image, points, diameter=5):
 if __name__ == "__main__":
     tf.config.experimental_run_functions_eagerly(True)
     dataset = Data_Loader('droso',8)
-    dataset()
+    dataset(keypoints=[0,1,2])
     iterator = iter(dataset.data)
     for _ in range(5):
             

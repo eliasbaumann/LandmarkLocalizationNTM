@@ -30,6 +30,7 @@ class Data_Loader():
         
 
     def __call__(self, im_size = [256,256], keypoints=None):
+        self.keypoints = keypoints
         if self.name == 'droso':
             self.load_droso()
             
@@ -137,17 +138,18 @@ class Data_Loader():
         by selecting with a list, always starting with 0 
         i.e. [0,1,14,22] or [0,2,4,5]
         """
-        inv_kp_list = np.repeat(True, 3)
+        inv_kp_list = np.repeat(True, self.n_landmarks+1) # all landmarks + image itself which has only one dimension in this case
         inv_kp_list[kp_list] = False
-        inv_kp_list = [i for i, j in enumerate(inv_kp_list, start=0) if j]
-        kp_list = tf.constant(kp_list)
-        inv_kp_list = tf.constant(inv_kp_list)
+        inv_kp_ind = [i for i, j in enumerate(inv_kp_list, start=0) if j]
+        kp_list = tf.constant(kp_list, dtype=tf.int32)
+        inv_kp_ind = tf.constant(inv_kp_ind, dtype=tf.int32)
 
         def resplit(images, keypoints):
             params = tf.concat([images, keypoints], axis=0)
             inp = tf.gather(params, kp_list, axis=0)
-            lab = tf.gather(params, inv_kp_list, axis=0)
-            return inp, lab
+            lab = tf.gather(params, inv_kp_ind, axis=0)
+            return tf.data.Dataset.from_tensors((inp, lab))
+
 
         self.data = self.data.flat_map(resplit)
         self.val_data = self.val_data.flat_map(resplit)
