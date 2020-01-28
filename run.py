@@ -32,7 +32,7 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=800,
+parser.add_argument('--num_training_iterations', type=int, default=1000,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -138,7 +138,7 @@ def train_unet(num_training_iterations, kp_list=None):
     unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1))
     #unet_model = unet.convnet2d(128, dataset.n_landmarks)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)    
-    n_epochs = 20 # TODO
+    n_epochs = 40 # TODO
     tb_callback = tf.keras.callbacks.TensorBoard(log_dir=LOG_PATH)
     cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=CP_PATH,verbose=1, save_weights_only=True, save_freq=args.checkpoint_interval*args.batch_size*num_training_iterations//n_epochs) #ugly way of saving every 5 epochs :)
     unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
