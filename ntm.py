@@ -43,14 +43,14 @@ def create_linear_initializer(input_size):
     return tf.keras.initializers.TruncatedNormal(stddev=stddev, seed=42)
 
 # Big parts of this code taken from:
-# https://github.com/MarkPKCollier/NeuralTuringMachine/blob/master/ntm.py
+# https://github.com/MarkPKCollier/NeuralTuringMachine/blob/master/ntm.py / https://github.com/snowkylin/ntm/blob/master/model_v2.py # they have lots of overlap
 class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
     memory_mode: 'matrix' -> store matrices, 'embedding' -> create embedding and store
     '''
     def __init__(self, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
-                 init_mode='constant', memory_mode='matrix'):
+                 init_mode='constant', memory_mode='encoder'):
         super(NTMCell, self).__init__()
         self.controller_layers = controller_layers
         self.controller_units = controller_units
@@ -78,14 +78,14 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
         # self._ctrl2o = tf.keras.layers.Conv2D()#TODO how should the output look like?
         
-        # ########### TODO: Embedding mode:
+        # ########### TODO: encoder mode:
 
-        self._controller = tf.keras.layers.LSTMCell()
-        self._conv = tf.keras.layers.Conv2D(kernel_size=8, strides=4) #TODO
+        self._controller = tf.keras.layers.LSTMCell(units=self.controller_units)
+        # self._conv = tf.keras.layers.Conv2D(kernel_size=8, strides=4) #TODO
 
-        self._flat = tf.keras.layers.Flatten()
-        self._rs = tf.keras.layers.Reshape(target_shape=TODO)
-        self._us = tf.keras.layers.Conv2DTranspose(size=[8,8])
+        # self._flat = tf.keras.layers.Flatten()
+        # self._rs = tf.keras.layers.Reshape(target_shape=TODO)
+        # self._us = tf.keras.layers.Conv2DTranspose(size=[8,8])
 
         self.num_params_per_head = self.memory_vector_dim + 1 + 1 + (self.shift_range * 2 + 1) + 1
         self.total_param_num = self.num_params_per_head * self.num_heads + self.memory_vector_dim * 2 * self.write_head_num
@@ -105,6 +105,26 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
         self.o2p = tf.keras.layers.Dense(units=self.total_param_num, use_bias=True, kernel_initializer=self.o2p_initializer)
         self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer)
+
+        # for initial state: Create variables:
+        # from https://github.com/snowkylin/ntm/blob/master/ntm/ntm_cell_v2.py#L39 
+        self.init_memory_state = self.add_weight(name='init_memory_state',
+                                                 shape=[self.rnn_size],
+                                                 initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
+        self.init_carry_state = self.add_weight(name='init_carry_state',
+                                                shape=[self.rnn_size],
+                                                initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
+        self.init_r = [self.add_weight(name='init_r_%d' % i,
+                                       shape=[self.memory_vector_dim],
+                                       initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
+                       for i in range(self.read_head_num)]
+        self.init_w = [self.add_weight(name='init_w_%d' % i,
+                                       shape=[self.memory_size],
+                                       initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
+                       for i in range(self.read_head_num + self.write_head_num)]
+        self.init_M = self.add_weight(name='init_M',
+                                      shape=[self.memory_size, self.memory_vector_dim],
+                                      initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
     
     def __call__(self, x, prev_state):
         # TODO need to include the encoding/decoding -> we could also source this out, so that we don't have to change as much??, interesting...
@@ -190,16 +210,27 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             denom = u_norm * v_norm
             return tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
-    # TODO implement other init modes if necessary
-    def zero_state(self, batch_size, dtype):
-        read_vector_list = [self._expand(tf.tanh(self._learned_init(self.memory_vector_dim)), dim=0, N=batch_size) for i in range(self.read_head_num)]
-        w_list = [self._expand(tf.nn.softmax(self._learned_init(self.memory_size)), dim=0, N=batch_size) for i in range(self.read_head_num + self.write_head_num)]
+    def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
+        initial_state = NTMControllerState(
+            controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=batch_size),
+                                 self._expand(tf.tanh(self.init_carry_state), dim=0, N=batch_size)],
+            read_vector_list=[self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=batch_size)
+                                 for i in range(self.read_head_num)],
+            w_list=[self._expand(tf.nn.softmax(self.init_w[i]), dim=0, N=batch_size)
+                       for i in range(self.read_head_num + self.write_head_num)],
+            M=self._expand(tf.tanh(self.init_M), dim=0, N=batch_size)
+        )
 
-        controller_init_state = self.controller.zero_state(batch_size, dtype)
+    
+    # def zero_state(self, batch_size, dtype):
+    #     read_vector_list = [self._expand(tf.tanh(self._learned_init(self.memory_vector_dim)), dim=0, N=batch_size) for i in range(self.read_head_num)]
+    #     w_list = [self._expand(tf.nn.softmax(self._learned_init(self.memory_size)), dim=0, N=batch_size) for i in range(self.read_head_num + self.write_head_num)]
 
-        if self.init_mode == 'random':
-            M = self._expand(tf.tanh(tf.reshape(learned_init(self.memory_size * self.memory_vector_dim), [self.memory_size, self.memory_vector_dim])), dim=0, N=batch_size)
-        return NTMControllerState(controller_state=controller_init_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
+    #     controller_init_state = self.controller.zero_state(batch_size, dtype) # TODO check if still exists
+
+    #     if self.init_mode == 'random':
+    #         M = self._expand(tf.tanh(tf.reshape(learned_init(self.memory_size * self.memory_vector_dim), [self.memory_size, self.memory_vector_dim])), dim=0, N=batch_size)
+    #     return NTMControllerState(controller_state=controller_init_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
 
 
     def _expand(self, x, dim, N):
