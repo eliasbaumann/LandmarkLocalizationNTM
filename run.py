@@ -2,7 +2,6 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import cv2
 
-import dnccell
 import data
 import unet
 
@@ -58,25 +57,25 @@ def vis_points(image, points, diameter=5, given_kp=None):
             cv2.circle(im, (int(x), int(y)), diameter, (0, 255, 0), -1)
     plt.imshow(im)
 
-class dnc_model(tf.keras.Model):
-    def __init__(self, output_size):
-        super(dnc_model, self).__init__()
-        self.output_size = output_size
+# class dnc_model(tf.keras.Model):
+#     def __init__(self, output_size):
+#         super(dnc_model, self).__init__()
+#         self.output_size = output_size
     
-    def call(self, inputs):
-        access_config = {
-            "memory_size": args.memory_size,
-            "word_size": args.word_size,
-            "num_reads": args.num_read_heads,
-            "num_writes": args.num_write_heads}
-        controller_config = {
-            "hidden_layers": args.hidden_layers,
-            "hidden_size": args.hidden_size}
-        clip_value = args.clip_value
-        cell = dnccell.DNCCell(access_config, controller_config, self.output_size, clip_value)
-        initial_state = cell.initial_state(args.batch_size)
-        output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True)(inputs, initial_state=initial_state)
-        return output_sequence
+#     def call(self, inputs):
+#         access_config = {
+#             "memory_size": args.memory_size,
+#             "word_size": args.word_size,
+#             "num_reads": args.num_read_heads,
+#             "num_writes": args.num_write_heads}
+#         controller_config = {
+#             "hidden_layers": args.hidden_layers,
+#             "hidden_size": args.hidden_size}
+#         clip_value = args.clip_value
+#         cell = dnccell.DNCCell(access_config, controller_config, self.output_size, clip_value)
+#         initial_state = cell.initial_state(args.batch_size)
+#         output_sequence, _ = tf.keras.layers.RNN(cell, time_major=True)(inputs, initial_state=initial_state)
+#         return output_sequence
 
 def loss_func(gt_labels, logits):
     loss = tf.nn.l2_loss(gt_labels-logits) / args.batch_size
@@ -132,10 +131,10 @@ def predict_from_cp(kp_list=None):
         img, label = next(iterator)
         vis_results(img, label, unet_model,kp_list)
 
-def train_unet(num_training_iterations, kp_list=None):
+def train_unet(num_training_iterations, kp_list=None, ntm=False):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset(keypoints=kp_list)
-    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1))
+    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1), ntm=ntm, batch_size=args.batch_size)
     #unet_model = unet.convnet2d(128, dataset.n_landmarks)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)    
     n_epochs = 40 # TODO
@@ -154,25 +153,6 @@ def train_unet(num_training_iterations, kp_list=None):
         img, label = next(iterator)
         vis_results(img, label, unet_model,kp_list)
 
-
-def train_dnc(num_training_iterations, report_interval):
-    dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset()
-    iterator = iter(dataset.data)
-    model = dnc_model(dataset) # TODO dataset has no outputsize anymore, because we predict heatmaps, we need to construct it differently now
-    optimizer = tf.keras.optimizers.RMSprop(learning_rate=args.learning_rate, epsilon=args.optimizer_epsilon)
-    for iteration in range(num_training_iterations):
-        observation, label = next(iterator)
-        with tf.GradientTape() as tape:
-            output_logits = model(observation)
-            loss = loss_func(output_logits, label)
-        grads, _ = tf.clip_by_global_norm(tape.gradient(loss, model.trainable_weights), args.max_grad_norm)
-        optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        
-        if iteration % report_interval == 0:
-            print(loss)
-
 if __name__ == "__main__":
-    # train_dnc(args.num_training_iterations, args.report_interval)
-    train_unet(args.num_training_iterations, kp_list = [0,1,2])
+    train_unet(args.num_training_iterations, kp_list = [0,1,2], ntm=True)
     # predict_from_cp()

@@ -1,4 +1,5 @@
 import tensorflow as tf
+from enc_dec import Encoder_Decoder_Wrapper
 
 # TODO: Tasks 
 # - fixed upsampling instead of deconv?? Is in, but needs tryiing
@@ -18,13 +19,15 @@ class convnet2d(tf.keras.Model):
 
 
 class unet2d(tf.keras.Model):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, name='unet2d', **kwargs):
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, ntm=False, batch_size=None, name='unet2d', **kwargs):
         super(unet2d, self).__init__(name=name, **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
         self.num_landmarks = num_landmarks
-        self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors)
+        self.ntm = ntm
+        self.batch_size = batch_size
+        self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm=self.ntm, batch_size=self.batch_size)
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
     def call(self, inputs):
@@ -33,11 +36,13 @@ class unet2d(tf.keras.Model):
         return res
 
 class unet(tf.keras.layers.Layer):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, activation=tf.keras.activations.relu, layer=0, name='unet', **kwargs):
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm=False, batch_size=None, activation=tf.keras.activations.relu, layer=0, name='unet', **kwargs):
         super(unet, self).__init__(name=name, **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
+        self.ntm = ntm
+        self.batch_size = batch_size
         self.activation = activation
         self.layer = layer
         self.inp_conv = conv_pass(kernel_size=3,
@@ -47,6 +52,11 @@ class unet(tf.keras.layers.Layer):
                                   name='unet_left_%i'%self.layer)
         self.drop = tf.keras.layers.Dropout(.2,seed=42)
 
+        if self.ntm and self.layer==0:
+            assert self.batch_size is not None, 'Please set batch_size in unet2d init'
+            self.ntm_enc_dec = Encoder_Decoder_Wrapper(num_filters=64, kernel_size=3, pool_size=4, batch_size=self.batch_size) # TODO batch size is set to 8, change to be alterable
+        else:
+            self.ntm_enc_dec = None
         if self.layer < len(self.downsample_factors):
             self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor,
                                  fmap_inc_factor=self.fmap_inc_factor,
@@ -68,6 +78,8 @@ class unet(tf.keras.layers.Layer):
 
     def call(self, inputs):
         f_left = self.inp_conv(inputs)
+        if self.ntm and self.layer==0:
+            f_left = self.ntm_enc_dec(f_left)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)

@@ -3,8 +3,6 @@ import numpy as np
 
 import collections
 
-# BIG TODO
-
 NTMControllerState = collections.namedtuple('NTMControllerState', ('controller_state', 'read_list', 'w_list', 'M'))
 
 class ntm(tf.keras.Model):
@@ -48,11 +46,11 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
     memory_mode: 'matrix' -> store matrices, 'embedding' -> create embedding and store
     '''
-    def __init__(self, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
+    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
                  init_mode='constant', memory_mode='encoder'):
         super(NTMCell, self).__init__()
-        self.controller_layers = controller_layers
+        # self.controller_layers = controller_layers
         self.controller_units = controller_units
         self.memory_size = memory_size
         self.memory_vector_dim = memory_vector_dim
@@ -81,16 +79,9 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         # ########### TODO: encoder mode:
 
         self._controller = tf.keras.layers.LSTMCell(units=self.controller_units)
-        # self._conv = tf.keras.layers.Conv2D(kernel_size=8, strides=4) #TODO
-
-        # self._flat = tf.keras.layers.Flatten()
-        # self._rs = tf.keras.layers.Reshape(target_shape=TODO)
-        # self._us = tf.keras.layers.Conv2DTranspose(size=[8,8])
 
         self.num_params_per_head = self.memory_vector_dim + 1 + 1 + (self.shift_range * 2 + 1) + 1
         self.total_param_num = self.num_params_per_head * self.num_heads + self.memory_vector_dim * 2 * self.write_head_num
-
-
 
         self.init_mode = init_mode
 
@@ -109,10 +100,10 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         # for initial state: Create variables:
         # from https://github.com/snowkylin/ntm/blob/master/ntm/ntm_cell_v2.py#L39 
         self.init_memory_state = self.add_weight(name='init_memory_state',
-                                                 shape=[self.rnn_size],
+                                                 shape=[self.controller_units],
                                                  initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
         self.init_carry_state = self.add_weight(name='init_carry_state',
-                                                shape=[self.rnn_size],
+                                                shape=[self.controller_units],
                                                 initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
         self.init_r = [self.add_weight(name='init_r_%d' % i,
                                        shape=[self.memory_vector_dim],
@@ -126,18 +117,17 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
                                       shape=[self.memory_size, self.memory_vector_dim],
                                       initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
     
-    def __call__(self, x, prev_state):
-        # TODO need to include the encoding/decoding -> we could also source this out, so that we don't have to change as much??, interesting...
+    def call(self, x, prev_state):
         prev_read_list = prev_state.read_list
 
-        controller_input = tf.concat([x] + prev_read_list, axis=0) #TODO this likely wont work, change when you fully understand whats happening
-        #with tf.variable_scope('controller', reuse=self.reuse):
+        controller_input = tf.concat([x] + prev_read_list, axis=1) #TODO this likely wont work, change when you fully understand whats happening
+
         controller_output, controller_state = self._controller(controller_input, prev_state.controller_state)
         parameters = self.o2p(controller_output)
         parameters = tf.clip_by_value(parameters, -self.clip_value, self.clip_value)
 
-        head_parameter_list = tf.split(parameters[:, :self.num_parameters_per_head * self.num_heads], self.num_heads, axis=1)
-        erase_add_list = tf.split(parameters[:, self.num_parameters_per_head * self.num_heads:], 2 * self.write_head_num, axis=1)
+        head_parameter_list = tf.split(parameters[:, :self.num_params_per_head * self.num_heads], self.num_heads, axis=1)
+        erase_add_list = tf.split(parameters[:, self.num_params_per_head * self.num_heads:], 2 * self.write_head_num, axis=1)
 
         prev_w_list = prev_state.w_list
         prev_M = prev_state.M
@@ -150,13 +140,12 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             g = tf.sigmoid(head_parameter[:, self.memory_vector_dim + 1])
             s = tf.nn.softmax(head_parameter[:, self.memory_vector_dim + 2:self.memory_vector_dim + 2 + (self.shift_range * 2 + 1)])
             gamma = tf.nn.softplus(head_parameter[:, -1]) + 1
-            with tf.variable_scope('addressing_head_%d' % i):
-                w = self._addressing(k, beta, g, s, gamma, prev_M, prev_w_list[i])
+            w = self._addressing(k, beta, g, s, gamma, prev_M, prev_w_list[i])
             w_list.append(w)
         
         # read
         read_w_list = w_list[:self.read_head_num]
-        read_vector_list = [tf.reduce_sum(tf.expand_dims(read_w_list[i], dim=2)*prev_M, axis=1) for i in range(self.read_head_num)]
+        read_vector_list = [tf.reduce_sum(tf.expand_dims(read_w_list[i], axis=2)*prev_M, axis=1) for i in range(self.read_head_num)]
         
         # write
         write_w_list = w_list[self.read_head_num:]
@@ -170,7 +159,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1))
         ntm_output = tf.clip_by_value(ntm_output, -self.clip_value, self.clip_value)
         self.step += 1
-        return ntm_output, NTMControllerState(controller_state=controller_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
+        return ntm_output, NTMControllerState(controller_state=controller_state, read_list=read_vector_list, w_list=w_list, M=M)
 
     def _addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
         # content focussing:
@@ -203,23 +192,25 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         Evaluates similarity between key vector and every row in Memory
         Implemented: cosine similarity
         '''
+        u = tf.expand_dims(u,axis=2)
         if method=='cosine':
+
             nom = tf.matmul(v, u)
             u_norm = tf.sqrt(tf.reduce_sum(tf.square(u), axis=1, keepdims=True))
             v_norm = tf.sqrt(tf.reduce_sum(tf.square(v), axis=2, keepdims=True))
-            denom = u_norm * v_norm
+            denom = v_norm * u_norm
             return tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
     def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
         initial_state = NTMControllerState(
             controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=batch_size),
                                  self._expand(tf.tanh(self.init_carry_state), dim=0, N=batch_size)],
-            read_vector_list=[self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=batch_size)
+            read_list=[self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=batch_size)
                                  for i in range(self.read_head_num)],
             w_list=[self._expand(tf.nn.softmax(self.init_w[i]), dim=0, N=batch_size)
                        for i in range(self.read_head_num + self.write_head_num)],
-            M=self._expand(tf.tanh(self.init_M), dim=0, N=batch_size)
-        )
+            M=self._expand(tf.tanh(self.init_M), dim=0, N=batch_size))
+        return initial_state
 
     
     # def zero_state(self, batch_size, dtype):
