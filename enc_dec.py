@@ -18,7 +18,7 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.Layer):
         self.ds = tf.keras.layers.AveragePooling2D(pool_size=pool_size, strides=pool_size, data_format='channels_first')
         self.us = tf.keras.layers.UpSampling2D(size=pool_size, data_format='channels_first')
 
-        self.cell = NTMCell(controller_units=256, memory_size=64, memory_vector_dim=256, read_head_num=1, write_head_num=1, output_dim=256) # TODO
+        self.cell = NTMCell(controller_units=256, memory_size=64, memory_vector_dim=256, read_head_num=3, write_head_num=3, output_dim=256) # TODO
 
 
     def call(self, inputs):

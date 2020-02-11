@@ -79,7 +79,8 @@ class unet(tf.keras.layers.Layer):
     def call(self, inputs):
         f_left = self.inp_conv(inputs)
         if self.ntm and self.layer==0:
-            f_left = self.ntm_enc_dec(f_left)
+            mem = self.ntm_enc_dec(f_left)
+            f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)

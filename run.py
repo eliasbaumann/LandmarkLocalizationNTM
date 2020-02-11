@@ -118,11 +118,11 @@ def vis_results(img,label,model,kp_list):
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
     plt.show()
 
-def predict_from_cp(kp_list=None):
+def predict_from_cp(kp_list=None, ntm=False):
     dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset()
+    dataset(keypoints=kp_list)
     latest = tf.train.latest_checkpoint(CP_DIR)
-    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks)
+    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1), ntm=ntm, batch_size=args.batch_size)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
     unet_model.load_weights(latest)
@@ -154,5 +154,5 @@ def train_unet(num_training_iterations, kp_list=None, ntm=False):
         vis_results(img, label, unet_model,kp_list)
 
 if __name__ == "__main__":
-    train_unet(args.num_training_iterations, kp_list = [0,1,2], ntm=True)
-    # predict_from_cp()
+    #train_unet(args.num_training_iterations, kp_list = [0,1,2], ntm=True)
+    predict_from_cp(kp_list = [0,1,2], ntm=True)
