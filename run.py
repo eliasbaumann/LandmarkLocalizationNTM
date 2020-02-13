@@ -31,7 +31,9 @@ parser.add_argument('--optimizer_epsilon', type=float, default=1e-10,
                       help='Epsilon used for RMSProp optimizer.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=1000,
+parser.add_argument('--num_training_iterations', type=int, default=10,
+                        help='Number of iterations to train for.')
+parser.add_argument('--num_epochs', type=int, default=2,
                         help='Number of iterations to train for.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -41,10 +43,6 @@ parser.add_argument('--checkpoint_interval', type=int, default=5,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-
-LOG_PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-CP_PATH = LOG_PATH+'\\models\\cp-{epoch:04d}.ckpt'
-CP_DIR = os.path.dirname(CP_PATH)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy()
@@ -118,10 +116,11 @@ def vis_results(img,label,model,kp_list):
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
     plt.show()
 
-def predict_from_cp(kp_list=None, ntm=False):
+def predict_from_cp(path, run_number, kp_list=None, ntm=False):
+    cp_dir = load_dir(path, run_number)
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset(keypoints=kp_list)
-    latest = tf.train.latest_checkpoint(CP_DIR)
+    latest = tf.train.latest_checkpoint(cp_dir)
     unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1), ntm=ntm, batch_size=args.batch_size)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
@@ -131,28 +130,50 @@ def predict_from_cp(kp_list=None, ntm=False):
         img, label = next(iterator)
         vis_results(img, label, unet_model,kp_list)
 
-def train_unet(num_training_iterations, kp_list=None, ntm=False):
+def train_unet(path, kp_list=None, ntm=False):
+    log_path, cp_path = create_dir(path)
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset(keypoints=kp_list)
-    unet_model = unet.unet2d(128,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1), ntm=ntm, batch_size=args.batch_size)
+    unet_model = unet.unet2d(64,2,[[2,2],[2,2],[2,2],[2,2]],dataset.n_landmarks-(len(kp_list)-1), ntm=ntm, batch_size=args.batch_size)
     #unet_model = unet.convnet2d(128, dataset.n_landmarks)
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)    
-    n_epochs = 40 # TODO
-    tb_callback = tf.keras.callbacks.TensorBoard(log_dir=LOG_PATH)
-    cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=CP_PATH,verbose=1, save_weights_only=True, save_freq=args.checkpoint_interval*args.batch_size*num_training_iterations//n_epochs) #ugly way of saving every 5 epochs :)
+    tb_callback = tf.keras.callbacks.TensorBoard(log_dir=log_path)
+    cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=cp_path,verbose=1, save_weights_only=True, save_freq=args.checkpoint_interval*args.batch_size*args.num_training_iterations//args.num_epochs) #ugly way of saving every 5 epochs :)
     unet_model.compile(optimizer, loss = loss_func, metrics= [coord_dist])
-    unet_model.save_weights(CP_PATH.format(epoch=0))
+    unet_model.save_weights(cp_path.format(epoch=0))
     unet_model.fit(x=dataset.data,
-                   epochs=n_epochs,
+                   epochs=args.num_epochs,
                    validation_data=dataset.val_data,
-                   steps_per_epoch=num_training_iterations//n_epochs,
+                   steps_per_epoch=args.num_training_iterations//args.num_epochs,
                    validation_steps=1,
                    callbacks=[tb_callback, cp_callback]) 
+    unet_model.summary()
     iterator = iter(dataset.test_data)
-    for _ in range(5):
+    for _ in range(5): # TODO the problem might be that i can only predict a batch, not a single file anymore? because of previous_read_list?
         img, label = next(iterator)
         vis_results(img, label, unet_model,kp_list)
 
+def create_dir(path):
+    previous_runs = os.listdir(path)
+    if len(previous_runs) == 0:
+        run_number = 1
+    else:
+        run_number = max([int(s.split('run_')[1]) for s in previous_runs]) + 1
+
+    logdir = 'run_%02d' % run_number
+    l_dir = os.path.join(path, logdir)
+    cp_dir = l_dir +'\\cp\\cp-{epoch:04d}.ckpt'
+    return l_dir, cp_dir
+
+def load_dir(path, run_number):
+    logdir = 'run_%02d' % run_number
+    l_dir = os.path.join(path, logdir)
+    cp_pth = l_dir+'\\cp\\cp-{epoch:04d}.ckpt'
+    cp_dir = os.path.dirname(cp_pth)
+    return cp_dir
+
+
 if __name__ == "__main__":
-    #train_unet(args.num_training_iterations, kp_list = [0,1,2], ntm=True)
-    predict_from_cp(kp_list = [0,1,2], ntm=True)
+    PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
+    train_unet(PATH, kp_list = [0,1,2], ntm=True)
+    # predict_from_cp(PATH, 1, kp_list = [0,1,2], ntm=True)
