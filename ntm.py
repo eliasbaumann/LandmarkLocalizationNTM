@@ -5,36 +5,6 @@ import collections
 
 NTMControllerState = collections.namedtuple('NTMControllerState', ('controller_state', 'read_list', 'w_list', 'M'))
 
-class ntm(tf.keras.Model):
-    def __init__(self):
-        super(ntm, self).__init__()
-    
-    def call(self, inputs):
-        pass
-
-
-class aug_unet(tf.keras.layers.Layer):
-    def __init__(self):
-        super(aug_unet, self).__init__()
-
-    def call(self, inputs):
-        pass
-
-class mem_conv_rnn(tf.keras.layers.Layer):
-    def __init__(self):
-        super(mem_conv_rnn, self).__init__()
-    
-    def call(self, inputs):
-        pass
-
-# https://github.com/MarkPKCollier/NeuralTuringMachine/blob/master/utils.py
-def expand(x, dim, N):
-    return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim)
-
-def learned_init(units):
-    # return tf.squeeze(tf.contrib.layers.fully_connected(tf.ones([1, 1]), units,
-    #     activation_fn=None, biases_initializer=None))
-    return tf.squeeze(tf.keras.layers.Dense(units=units, activation=None, biases_initializer=None)(tf.ones([1, 1])))
 
 def create_linear_initializer(input_size):
     stddev = 1.0 / np.sqrt(input_size)
@@ -120,7 +90,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     def call(self, x, prev_state):
         prev_read_list = prev_state.read_list
 
-        controller_input = tf.concat([x] + prev_read_list, axis=1) #TODO this likely wont work, change when you fully understand whats happening
+        controller_input = tf.concat([x] + prev_read_list, axis=1, name='concat_ctrl_inp') #TODO this likely wont work, change when you fully understand whats happening
 
         controller_output, controller_state = self._controller(controller_input, prev_state.controller_state)
         parameters = self.o2p(controller_output)
@@ -156,7 +126,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             add_vec = tf.expand_dims(tf.tanh(erase_add_list[i*2+1]), axis=1)
             M = M * (tf.ones(M.get_shape()) - tf.matmul(w, erase_vec)) + tf.matmul(w, add_vec)
 
-        ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1))
+        ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1, name='concat_ntm_out'))
         ntm_output = tf.clip_by_value(ntm_output, -self.clip_value, self.clip_value)
         self.step += 1
         return ntm_output, NTMControllerState(controller_state=controller_state, read_list=read_vector_list, w_list=w_list, M=M)
@@ -174,11 +144,11 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         # TODO i literally do not know whats happening here, we create the shift matrix i guess
         s = tf.concat([s[:, :self.shift_range + 1],
                        tf.zeros([s.get_shape()[0], self.memory_size - (self.shift_range * 2 + 1)]),
-                       s[:, -self.shift_range:]], axis=1)
+                       s[:, -self.shift_range:]], axis=1, name='concat_adressing_1')
         t = tf.concat([tf.reverse(s, axis=[1]), tf.reverse(s, axis=[1])], axis=1)
         s_matrix = tf.stack(
             [t[:, self.memory_size - i - 1:self.memory_size * 2 - i - 1] for i in range(self.memory_size)],
-            axis=1
+            axis=1, name='concat_adressing_2'
         )
 
         w_ = tf.reduce_sum(tf.expand_dims(w_g, axis=1)*s_matrix, axis=2)
@@ -212,20 +182,8 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             M=self._expand(tf.tanh(self.init_M), dim=0, N=batch_size))
         return initial_state
 
-    
-    # def zero_state(self, batch_size, dtype):
-    #     read_vector_list = [self._expand(tf.tanh(self._learned_init(self.memory_vector_dim)), dim=0, N=batch_size) for i in range(self.read_head_num)]
-    #     w_list = [self._expand(tf.nn.softmax(self._learned_init(self.memory_size)), dim=0, N=batch_size) for i in range(self.read_head_num + self.write_head_num)]
-
-    #     controller_init_state = self.controller.zero_state(batch_size, dtype) # TODO check if still exists
-
-    #     if self.init_mode == 'random':
-    #         M = self._expand(tf.tanh(tf.reshape(learned_init(self.memory_size * self.memory_vector_dim), [self.memory_size, self.memory_vector_dim])), dim=0, N=batch_size)
-    #     return NTMControllerState(controller_state=controller_init_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
-
-
     def _expand(self, x, dim, N):
-        return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim)
+        return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand')
 
     def _learned_init(self, units):
         return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None)(tf.ones([1, 1])))
