@@ -11,5 +11,5 @@ __pycache__/heatmapgen.cpython-36.pyc
 __pycache__/run.cpython-36.pyc
 __pycache__/net_tests.cpython-36.pyc
 __pycache__/tests.cpython-36.pyc
-__pycache__/enc_dec.cpython-36.pyc
-__pycache__/ntm.cpython-36.pyc
+compute_receptive_field.py
+.vscode/launch.json
