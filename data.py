@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 PATH = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
 
-
+@tf.function
 def decode_image(file_path):
     img = tf.io.read_file(file_path)
     img = tf.io.decode_image(img, dtype= tf.dtypes.float32)
@@ -30,6 +30,7 @@ class Data_Loader():
         
 
     def __call__(self, im_size = [256,256], keypoints=None):
+        print("Creating Datasets...")
         self.keypoints = keypoints
         if self.name == 'droso':
             self.load_droso()
@@ -64,6 +65,7 @@ class Data_Loader():
         
         if self.prefetch:
             self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+        print("Datasets loaded")
 
     def convert_to_hm(self, keypoints, im_size):
             heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
@@ -144,6 +146,7 @@ class Data_Loader():
         kp_list = tf.constant(kp_list, dtype=tf.int32)
         inv_kp_ind = tf.constant(inv_kp_ind, dtype=tf.int32)
 
+        @tf.function
         def resplit(images, keypoints):
             params = tf.concat([images, keypoints], axis=0)
             inp = tf.gather(params, kp_list, axis=0)
@@ -160,6 +163,7 @@ class Data_Loader():
         data_dir = pathlib.Path(PATH+self.name+'/RawImage/')
         list_im = tf.data.Dataset.list_files(str(data_dir)+'*/*')
         
+        @tf.function
         def process_path(file_path):
             img = decode_image(file_path)
             file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
@@ -176,6 +180,7 @@ class Data_Loader():
         data_dir = pathlib.Path(PATH+self.name+'/images/')
         list_im = tf.data.Dataset.list_files(str(data_dir)+'*.jpg')
 
+        @tf.function
         def process_path(file_path):
             img = decode_image(file_path)
             file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
