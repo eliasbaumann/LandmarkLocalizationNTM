@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 
+import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import cv2
@@ -74,6 +75,17 @@ def get_max_indices(logits):
     return tf.cast(coords, tf.float32)
 
 @tf.function
+def per_kp_stats(y_true, y_pred, margin):
+    y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred)
+    y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true)
+    exp_y_pred = tf.expand_dims(y_pred, 1)
+    exp_y_true = tf.expand_dims(y_true, 2)
+    exp_closest = tf.argmin(tf.reduce_mean(tf.square(tf.abs(tf.subtract(exp_y_pred, exp_y_true))), axis=-1), axis=-1)
+    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(exp_closest, tf.range(exp_closest.shape[-1], dtype=tf.int64)), dtype=tf.float32), axis=0)
+    within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0)
+    return within_margin, closest_to_nearest
+
+@tf.function
 def unstack_img_lab(img, kp_list):
     given_kp = tf.gather(img, tf.constant([0]), axis=0)    
     given_kp = tf.gather(img, tf.constant(range(1,len(kp_list))), axis=0)
@@ -82,22 +94,6 @@ def unstack_img_lab(img, kp_list):
     return image, given_kp
 
 def store_results(img, label, model, kp_list, i, path):
-    given_kp = None
-    img = tf.expand_dims(img, 0)
-    label = tf.expand_dims(label, 0)
-    pred = model.predict(img)
-    if kp_list is not None:
-        img, given_kp = unstack_img_lab(tf.squeeze(img), kp_list)
-    pred_keypoints = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), pred)
-    lab_kp = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), label)
-    vis_points(img.numpy().squeeze(), pred_keypoints.numpy()[0], 5, given_kp)
-    if not os.path.exists(path+'\\samples\\'):
-        os.makedirs(path+'\\samples\\')
-    plt.savefig(path+'\\samples\\%02d_pred.png' % i)
-    vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
-    plt.savefig(path+'\\samples\\%02d_gt.png' % i)
-
-def store_results2(img, label, model, kp_list, i, path):
     given_kp = None
     img = tf.expand_dims(img, 0)
     label = tf.expand_dims(label, 0)
@@ -113,6 +109,7 @@ def store_results2(img, label, model, kp_list, i, path):
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
     plt.savefig(path+'\\samples\\%02d_gt.png' % i)
 
+# TODO Switch over to custom loop
 def predict_from_cp(path, run_number, num_filters, fmap_inc_factor, ds_factors, kp_list=None, ntm=False):
     if kp_list == [0]:
         kp_list = None
@@ -130,44 +127,22 @@ def predict_from_cp(path, run_number, num_filters, fmap_inc_factor, ds_factors, 
         img, label = next(iterator)
         store_results(img, label, unet_model, kp_list, i, log_dir)
 
-def train_unet(path, num_filters, fmap_inc_factor, ds_factors, kp_list=None, ntm=False):
+def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=None, ntm=False, load_from_cp=False, run_number=None, kp_metric_margin=3):
     if kp_list == [0]:
         kp_list = None
-    log_path, cp_path = create_dir(path)
+    kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset(keypoints=kp_list)
     len_kp = (len(kp_list)-1) if kp_list is not None else 0
     unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm=ntm, batch_size=args.batch_size)
-    #unet_model = unet.convnet2d(128, dataset.n_landmarks)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)    
-    tb_callback = tf.keras.callbacks.TensorBoard(log_dir=log_path)
-    cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=cp_path,verbose=1, save_weights_only=True, save_freq=args.checkpoint_interval*args.batch_size*args.num_training_iterations//args.num_epochs) #ugly way of saving every 5 epochs :)
-    unet_model.compile(optimizer, loss = ssd_loss, metrics= [coord_dist])
-    unet_model.save_weights(cp_path.format(epoch=0))
-    unet_model.fit(x=dataset.data,
-                   epochs=args.num_epochs,
-                   validation_data=dataset.val_data,
-                   steps_per_epoch=args.num_training_iterations//args.num_epochs,
-                   validation_steps=10,
-                   callbacks=[tb_callback, cp_callback]) 
-    unet_model.summary()
-    iterator = iter(dataset.test_data)
-    for i in range(5): # TODO the problem might be that i can only predict a batch, not a single file anymore? because of previous_read_list?
-        img, label = next(iterator)
-        store_results(img, label, unet_model,kp_list, i, log_path)
-
-
-def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=None, ntm=False):
-    if kp_list == [0]:
-        kp_list = None
-    log_path, cp_path = create_dir(path)
+    if load_from_cp:
+        log_path, cp_path = load_dir(path, run_number)
+        latest = tf.train.latest_checkpoint(log_path+"\\cp\\")
+        unet_model.load_weights(latest)
+    else:
+        log_path, cp_path = create_dir(path)
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
-    dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset(keypoints=kp_list)
-    len_kp = (len(kp_list)-1) if kp_list is not None else 0
-    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm=ntm, batch_size=args.batch_size)
-
     @tf.function
     def predict(img):
         return unet_model(img)
@@ -179,6 +154,8 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
     val_loss = []
     train_coord_dist = []
     val_coord_dist = []
+    mrg = []
+    cgt = []
     tf.print("Starting train loop...")
     start_time = time.time()
     for step in range(args.num_training_iterations):
@@ -195,14 +172,28 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
             for _ in range(args.validation_steps):
                 img_v, lab_v = next(val)
                 pred_v = predict(img_v)
+                within_margin, closest_to_gt = per_kp_stats(lab_v, pred_v, 3)
+                mrg.append(within_margin)
+                cgt.append(closest_to_gt)
                 val_loss.append(ssd_loss(lab_v, pred_v))
                 val_coord_dist.append(coord_dist(lab_v, pred_v))
             tl_mean = tf.reduce_mean(train_loss)
             tcd_mean = tf.reduce_mean(train_coord_dist)
             vl_mean = tf.reduce_mean(val_loss)
             vcd_mean = tf.reduce_mean(val_coord_dist)
+            mrg_mean = tf.reduce_mean(mrg, axis=0)
+            cgt_mean = tf.reduce_mean(cgt, axis=0)
+            
             elapsed_time = int(time.time() - start_time)
             tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s): Train: ssd: ", tl_mean, ", coord_dist: ", tcd_mean, ", Val: ssd: ", vl_mean, ", coord_dist: ", vcd_mean)
+            tf.print("% within margin: ", mrg_mean, summarize=-1)
+            with open(os.path.join(log_path,'within_margin.txt'), 'ab') as mrgtxt:
+                np.savetxt(mrgtxt, [np.array(mrg_mean)], fmt='%3.3f', delimiter=",")
+            mrgtxt.close()
+            tf.print("% closest to gt", cgt_mean, summarize=-1)
+            with open(os.path.join(log_path,'closest_gt.txt'), 'ab') as cgttxt:
+                np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
+            cgttxt.close()
             with train_writer.as_default():
                 tf.summary.scalar("ssd_loss", tl_mean, step=step)
                 tf.summary.scalar("coord_dist", tcd_mean, step=step)
@@ -215,14 +206,17 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
             val_loss = []
             train_coord_dist = []
             val_coord_dist = []
+            mrg = []
+            cgt = []
         if step % args.checkpoint_interval == 0:
             unet_model.save_weights(cp_path.format(step=step))
-            print("saved cp-{:04d}.ckpt".format(step))
+            print("saved cp-{:05d}.ckpt".format(step))
     test = iter(dataset.test_data)
     for j in range(args.num_test_samples):
         img, lab = next(test)
-        store_results2(img, lab, unet_model, kp_list, j, log_path)
+        store_results(img, lab, unet_model, kp_list, j, log_path)
 
+# TODO rework this, so its consistent.
 def create_dir(path):
     previous_runs = os.listdir(path)
     if len(previous_runs) == 0:
