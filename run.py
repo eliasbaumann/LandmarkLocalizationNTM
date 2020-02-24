@@ -81,7 +81,7 @@ def per_kp_stats(y_true, y_pred, margin):
     exp_y_pred = tf.expand_dims(y_pred, 1)
     exp_y_true = tf.expand_dims(y_true, 2)
     exp_closest = tf.argmin(tf.reduce_mean(tf.square(tf.abs(tf.subtract(exp_y_pred, exp_y_true))), axis=-1), axis=-1)
-    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(exp_closest, tf.range(exp_closest.shape[-1], dtype=tf.int64)), dtype=tf.float32), axis=0)
+    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(exp_closest, tf.range(tf.shape(exp_closest)[-1], dtype=tf.int64)), dtype=tf.float32), axis=0)
     within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0)
     return within_margin, closest_to_nearest
 
@@ -172,7 +172,7 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
             for _ in range(args.validation_steps):
                 img_v, lab_v = next(val)
                 pred_v = predict(img_v)
-                within_margin, closest_to_gt = per_kp_stats(lab_v, pred_v, 3)
+                within_margin, closest_to_gt = per_kp_stats(lab_v, pred_v, kp_margin)
                 mrg.append(within_margin)
                 cgt.append(closest_to_gt)
                 val_loss.append(ssd_loss(lab_v, pred_v))
