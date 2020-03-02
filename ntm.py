@@ -18,8 +18,8 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
     def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
-                 init_mode='constant', memory_mode='encoder'):
-        super(NTMCell, self).__init__()
+                 init_mode='constant', memory_mode='encoder', name='ntm_cell'):
+        super(NTMCell, self).__init__(name=name)
         # self.controller_layers = controller_layers
         self.controller_units = controller_units
         self.memory_size = memory_size
@@ -30,11 +30,10 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.addressing_mode = addressing_mode
         self.reuse = reuse
         self.clip_value = clip_value
-
         self.num_heads = self.read_head_num+self.write_head_num
 
 
-        self._ds = tf.keras.layers.MaxPooling2D(pool_size=(8,8))
+        self._ds = tf.keras.layers.MaxPooling2D(pool_size=(8,8), name='ntm_pool2d')
 
         # ########### TODO: Matrix mode:
         # # TODO trying this using the already done implementation of convlstm2d        
@@ -64,8 +63,8 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.o2p_initializer = create_linear_initializer(self.controller_units)
         self.o2o_initializer = create_linear_initializer(self.controller_units + self.memory_vector_dim * self.read_head_num)
 
-        self.o2p = tf.keras.layers.Dense(units=self.total_param_num, use_bias=True, kernel_initializer=self.o2p_initializer)
-        self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer)
+        self.o2p = tf.keras.layers.Dense(units=self.total_param_num, use_bias=True, kernel_initializer=self.o2p_initializer, name='o2p')
+        self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer, name='o2o')
 
         # for initial state: Create variables:
         # from https://github.com/snowkylin/ntm/blob/master/ntm/ntm_cell_v2.py#L39 
@@ -87,6 +86,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
                                       shape=[self.memory_size, self.memory_vector_dim],
                                       initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
     
+    @tf.function
     def call(self, x, prev_state):
         prev_read_list = prev_state.read_list
 
@@ -130,7 +130,8 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         ntm_output = tf.clip_by_value(ntm_output, -self.clip_value, self.clip_value)
         self.step += 1
         return ntm_output, NTMControllerState(controller_state=controller_state, read_list=read_vector_list, w_list=w_list, M=M)
-
+    
+    @tf.function
     def _addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
         # content focussing:
         K = self._similarity(k, prev_M, method='cosine')
@@ -157,6 +158,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         return w
 
     # u = k, v = M
+    @tf.function
     def _similarity(self,u,v, method='cosine'):
         '''
         Evaluates similarity between key vector and every row in Memory
@@ -171,6 +173,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             denom = v_norm * u_norm
             return tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
+    @tf.function
     def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
         initial_state = NTMControllerState(
             controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=batch_size),
@@ -182,11 +185,13 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             M=self._expand(tf.tanh(self.init_M), dim=0, N=batch_size))
         return initial_state
 
+    @tf.function
     def _expand(self, x, dim, N):
         return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand')
 
+    @tf.function
     def _learned_init(self, units):
-        return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None)(tf.ones([1, 1])))
+        return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None, name='learned_init')(tf.ones([1, 1])))
 
     @property
     def state_size(self):

@@ -10,14 +10,12 @@ import cv2
 import data
 import unet
 
-
-
 parser = argparse.ArgumentParser()
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
 parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
-parser.add_argument('--num_test_samples', type=int, default=5, help='Number of samples from test to predict and save')
+parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
 
 # Model parameters
 parser.add_argument('--hidden_size', type=int, default=64, help='Size of LSTM hidden layer.')
@@ -66,7 +64,7 @@ def ssd_loss(gt_labels, logits):
 def coord_dist(y_true, y_pred):
     y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred)
     y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true)
-    return tf.keras.losses.MeanAbsoluteError()(y_true,y_pred)#tf.nn.l2_loss(y_true-y_pred) /args.batch_size
+    return tf.keras.losses.MeanAbsoluteError()(y_true, y_pred)#tf.nn.l2_loss(y_true-y_pred) /args.batch_size
 
 @tf.function
 def get_max_indices(logits):
@@ -81,7 +79,7 @@ def per_kp_stats(y_true, y_pred, margin):
     exp_y_pred = tf.expand_dims(y_pred, 1)
     exp_y_true = tf.expand_dims(y_true, 2)
     exp_closest = tf.argmin(tf.reduce_mean(tf.square(tf.abs(tf.subtract(exp_y_pred, exp_y_true))), axis=-1), axis=-1)
-    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(exp_closest, tf.range(tf.shape(exp_closest)[-1], dtype=tf.int64)), dtype=tf.float32), axis=0)
+    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(tf.cast(exp_closest, dtype=tf.int32), tf.range(tf.shape(exp_closest)[-1], dtype=tf.int32)), dtype=tf.float32), axis=0)
     within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0)
     return within_margin, closest_to_nearest
 
@@ -93,8 +91,9 @@ def unstack_img_lab(img, kp_list):
     image = tf.gather(img, tf.constant(0), axis=0)
     return image, given_kp
 
-def store_results(img, label, model, kp_list, i, path):
+def store_results(img, label, model, kp_list, fn, path):
     given_kp = None
+    filename = fn.numpy().decode('UTF-8')
     img = tf.expand_dims(img, 0)
     label = tf.expand_dims(label, 0)
     pred = model(img)
@@ -105,44 +104,48 @@ def store_results(img, label, model, kp_list, i, path):
     vis_points(img.numpy().squeeze(), pred_keypoints.numpy()[0], 5, given_kp)
     if not os.path.exists(path+'\\samples\\'):
         os.makedirs(path+'\\samples\\')
-    plt.savefig(path+'\\samples\\%02d_pred.png' % i)
+    plt.savefig(path+'\\samples\\'+filename+'_pred.png')
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
-    plt.savefig(path+'\\samples\\%02d_gt.png' % i)
+    plt.savefig(path+'\\samples\\'+filename+'_gt.png')
 
-# TODO Switch over to custom loop
-def predict_from_cp(path, run_number, num_filters, fmap_inc_factor, ds_factors, kp_list=None, ntm=False):
-    if kp_list == [0]:
-        kp_list = None
-    log_dir, cp_dir = load_dir(path, run_number)
-    dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset(keypoints=kp_list)
-    latest = tf.train.latest_checkpoint(cp_dir)
-    len_kp = (len(kp_list)-1) if kp_list is not None else 0
-    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm=ntm, batch_size=args.batch_size)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-    unet_model.compile(optimizer, loss=ssd_loss, metrics= [coord_dist])
-    unet_model.load_weights(latest)
-    iterator = iter(dataset.test_data)
-    for i in range(5):
-        img, label = next(iterator)
-        store_results(img, label, unet_model, kp_list, i, log_dir)
-
-def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=None, ntm=False, load_from_cp=False, run_number=None, kp_metric_margin=3):
+def predict_custom(path, kp_list=None, run_number=None, start_steps=0, kp_metric_margin=3):
+    if start_steps % args.checkpoint_interval != 0:
+            start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
     if kp_list == [0]:
         kp_list = None
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
     dataset = data.Data_Loader(args.dataset, args.batch_size)
     dataset(keypoints=kp_list)
     len_kp = (len(kp_list)-1) if kp_list is not None else 0
+    
+    log_path, cp_path = load_dir(path, run_number, start_steps)
+    unet_model = tf.keras.models.load_model(cp_path, compile=False)
+    latest = tf.train.latest_checkpoint(log_path+"\\cp\\")
+    print("checkpoint:",latest)
+    unet_model.load_weights(latest)
+    test = iter(dataset.test_data)
+    for _ in range(args.num_test_samples):
+        img, lab, fn = next(test)
+        store_results(img, lab, unet_model, kp_list, fn, log_path)
+
+def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list_in=None, kp_list_tg=None, ntm=False, run_number=None, start_steps=0, kp_metric_margin=3):
+    if kp_list_in == [0]:
+        kp_list_in = None
+    kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
+    dataset = data.Data_Loader(args.dataset, args.batch_size)
+    dataset(keypoints=kp_list_in)
+    len_kp = (len(kp_list_in)-1) if kp_list_in is not None else 0
     unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm=ntm, batch_size=args.batch_size)
-    if load_from_cp:
-        log_path, cp_path = load_dir(path, run_number)
-        latest = tf.train.latest_checkpoint(log_path+"\\cp\\")
-        unet_model.load_weights(latest)
+    if start_steps > 0:
+        if start_steps % args.checkpoint_interval != 0:
+            start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
+        log_path, cp_path, cp_dir = load_dir(path, run_number, start_steps)
+        unet_model.load_weights(cp_dir)
     else:
         log_path, cp_path = create_dir(path)
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
+    
     @tf.function
     def predict(img):
         return unet_model(img)
@@ -158,9 +161,9 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
     cgt = []
     tf.print("Starting train loop...")
     start_time = time.time()
-    for step in range(args.num_training_iterations):
+    for step in range(start_steps, args.num_training_iterations+1):
         with tf.GradientTape() as tape:
-            img, lab = next(train)
+            img, lab, _ = next(train)
             pred = predict(img)
             loss = ssd_loss(lab, pred)
         grad = tape.gradient(loss, unet_model.trainable_weights)
@@ -170,7 +173,7 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
         
         if step % args.report_interval == 0:
             for _ in range(args.validation_steps):
-                img_v, lab_v = next(val)
+                img_v, lab_v, _ = next(val)
                 pred_v = predict(img_v)
                 within_margin, closest_to_gt = per_kp_stats(lab_v, pred_v, kp_margin)
                 mrg.append(within_margin)
@@ -210,11 +213,11 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list=No
             cgt = []
         if step % args.checkpoint_interval == 0:
             unet_model.save_weights(cp_path.format(step=step))
-            print("saved cp-{:05d}.ckpt".format(step))
+            print("saved cp-{:04d}".format(step))
     test = iter(dataset.test_data)
-    for j in range(args.num_test_samples):
-        img, lab = next(test)
-        store_results(img, lab, unet_model, kp_list, j, log_path)
+    for _ in range(args.num_test_samples):
+        img, lab, fn = next(test)
+        store_results(img, lab, unet_model, kp_list_in, fn, log_path)
 
 # TODO rework this, so its consistent.
 def create_dir(path):
@@ -223,24 +226,24 @@ def create_dir(path):
         run_number = 1
     else:
         run_number = max([int(s.split('run_')[1]) for s in previous_runs]) + 1
-
     logdir = 'run_%02d' % run_number
     l_dir = os.path.join(path, logdir)
-    cp_dir = l_dir +'\\cp\\cp-{step:04d}.ckpt'
+    cp_dir = l_dir +'\\cp\\cp-{step:04d}'
     return l_dir, cp_dir
 
-def load_dir(path, run_number):
+def load_dir(path, run_number, step):
     logdir = 'run_%02d' % run_number
     l_dir = os.path.join(path, logdir)
-    cp_pth = l_dir+'\\cp\\cp-{step:04d}.ckpt'
-    cp_dir = os.path.dirname(cp_pth)
-    return l_dir, cp_dir
+    cp_pth = l_dir+'\\cp\\cp-{step:04d}'
+    cp_dir = l_dir+'\\cp\\cp-{step:04d}'.format(step=step)
+    #cp_dir = os.path.dirname(cp_pth)
+    return l_dir, cp_pth, cp_dir
 
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list=None, ntm=False)
-    # predict_from_cp(PATH, 3, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], kp_list = None, ntm=False)
+    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list_in=None, ntm=True, start_steps=1, run_number=12)
+    # predict_custom(PATH, kp_list=None, start_steps=0, run_number=6)
 
 
 # kp_list: 0 is image, remaining numpers are keypoints. If you dont want to include keypoints in input, set to None

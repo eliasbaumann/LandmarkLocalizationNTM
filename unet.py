@@ -19,7 +19,7 @@ class convnet2d(tf.keras.Model):
 
 
 class unet2d(tf.keras.Model):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, ntm=False, batch_size=None, name='unet2d', **kwargs):
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, ntm=False, batch_size=None, training=None, name='unet2d', **kwargs):
         super(unet2d, self).__init__(name=name, **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
@@ -27,9 +27,11 @@ class unet2d(tf.keras.Model):
         self.num_landmarks = num_landmarks
         self.ntm = ntm
         self.batch_size = batch_size
+        self.training = training
         self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm=self.ntm, batch_size=self.batch_size)
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
+    @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
         unet_2d = self.unet(inputs)
         res = self.logits(unet_2d) # TODO payer et al do no activation ?
@@ -37,7 +39,7 @@ class unet2d(tf.keras.Model):
 
 class unet(tf.keras.layers.Layer):
     def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm=False, batch_size=None, activation=tf.keras.activations.relu, layer=0, name='unet', **kwargs):
-        super(unet, self).__init__(name=name, **kwargs)
+        super(unet, self).__init__(name=name+'_'+str(layer), **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
@@ -50,32 +52,38 @@ class unet(tf.keras.layers.Layer):
                                   num_repetitions=2,
                                   activation=self.activation,
                                   name='unet_left_%i'%self.layer)
-        self.drop = tf.keras.layers.Dropout(.2,seed=42)
-
         if self.ntm and self.layer==0:
             assert self.batch_size is not None, 'Please set batch_size in unet2d init'
             self.ntm_enc_dec = Encoder_Decoder_Wrapper(num_filters=64, kernel_size=3, pool_size=4, batch_size=self.batch_size) # TODO batch size is set to 8, change to be alterable
         else:
             self.ntm_enc_dec = None
+        
+        if self.layer >= len(self.downsample_factors)-1:
+            self.drop = tf.keras.layers.Dropout(.2,seed=42, name='dropout_%i'%self.layer)
+        else:
+            self.drop = None
+
         if self.layer < len(self.downsample_factors):
             self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor,
                                  fmap_inc_factor=self.fmap_inc_factor,
                                  downsample_factors=self.downsample_factors,
                                  activation=self.activation,
                                  layer=self.layer+1)
-            self.ds = downsample(factors=self.downsample_factors[self.layer])
+            self.ds = downsample(factors=self.downsample_factors[self.layer], name='ds_%i'%self.layer)
             self.us = upsample(factors=self.downsample_factors[self.layer],
                                num_fmaps=self.num_fmaps,
-                               activation=self.activation)
-            self.crop = crop_spatial()
-            self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2)
+                               activation=self.activation,
+                               name='us_%i'%self.layer)
+            self.crop = crop_spatial(name='crop_%i'%self.layer)
+            self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2, name='unet_right_%i'%self.layer)
         else: 
             self.unet_rec = None
             self.ds = None
             self.us = None
             self.crop = None
             self.out_conv = None
-
+    
+    @tf.function
     def call(self, inputs):
         f_left = self.inp_conv(inputs)
         if self.ntm and self.layer==0:
@@ -96,6 +104,11 @@ class unet(tf.keras.layers.Layer):
         f_out = self.out_conv(f_right)
         return f_out
 
+    def get_config(self):
+        config = super(unet, self).get_config()
+        config.update({'num_fmaps':self.num_fmaps, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm':self.ntm, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
+        return config
+
 class conv_pass(tf.keras.layers.Layer):
     def __init__(self, kernel_size, num_fmaps, num_repetitions, activation=tf.keras.activations.relu, name='conv_pass', **kwargs):
         super(conv_pass, self).__init__(name=name, **kwargs)
@@ -110,25 +123,36 @@ class conv_pass(tf.keras.layers.Layer):
                                         activation=self.activation, 
                                         name=self.name+'_%i'%i) for i in range(self.num_repetitions)]
     
+    @tf.function
     def call(self, inputs):
         for i in range(self.num_repetitions):
             inputs = self.conv[i](inputs)
         return inputs
 
+    def get_config(self):
+        config = super(conv_pass,self).get_config()
+        config.update({'kernel_size':self.kernel_size, 'num_fmaps':self.num_fmaps, 'num_repetitions':self.num_repetitions, 'activation':self.activation})
+        return config
+
 class downsample(tf.keras.layers.Layer):
     def __init__(self, factors, name='ds', **kwargs):
         super(downsample, self).__init__(name = name, **kwargs)
         self.factors = factors
-        self.ds = tf.keras.layers.AveragePooling2D(pool_size=self.factors, strides=self.factors, padding='same', data_format='channels_first', name=self.name)
+        self.ds = tf.keras.layers.AveragePooling2D(pool_size=self.factors, strides=self.factors, padding='same', data_format='channels_first', name=self.name+'_internal')
     
-    
+    @tf.function
     def call(self, inputs):
         inputs = self.ds(inputs)
         return inputs
 
+    def get_config(self):
+        config = super(downsample, self).get_config()
+        config.update({'factors':self.factors})
+        return config
+
 class upsample(tf.keras.layers.Layer):
     def __init__(self, factors, num_fmaps, activation=tf.keras.activations.relu, name='us', **kwargs):
-        super(upsample, self).__init__(name=name, *kwargs)
+        super(upsample, self).__init__(name=name, **kwargs)
         self.factors = factors
         self.num_fmaps = num_fmaps
         self.activation = activation
@@ -139,17 +163,23 @@ class upsample(tf.keras.layers.Layer):
         #                                     data_format='channels_first',
         #                                     activation=self.activation,
         #                                     name=self.name)
-        self.us = tf.keras.layers.UpSampling2D(size=self.factors, data_format = "channels_first")
-
+        self.us = tf.keras.layers.UpSampling2D(size=self.factors, data_format = "channels_first", name=name+'_internal')
+    
+    @tf.function
     def call(self, inputs):
         inputs = self.us(inputs)
         return inputs
 
+    def get_config(self):
+        config = super(upsample, self).get_config()
+        config.update({'factors':self.factors, 'num_fmaps':self.num_fmaps, 'activation':self.activation})
+        return config
+
 class crop_spatial(tf.keras.layers.Layer):
-    def __init__(self):
-        super(crop_spatial, self).__init__(name='crop_spatial')
+    def __init__(self, name='crop_spatial', **kwargs):
+        super(crop_spatial, self).__init__(name=name, **kwargs)
         
-    
+    @tf.function
     def call(self, inputs, shape):
         in_shape = tf.shape(inputs)
         offset = [0,0] + [(in_shape[i] - shape[i]) // 2 for i in range(2, shape.shape[0])]

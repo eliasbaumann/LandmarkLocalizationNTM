@@ -16,11 +16,12 @@ def decode_image(file_path):
     return img
 
 class Data_Loader():
-    def __init__(self, name, batch_size, repeat=True, prefetch=True):
+    def __init__(self, name, batch_size, repeat=True, prefetch=True, n_aug_rounds=5):
         self.name = name
         self.batch_size = batch_size
         self.repeat = repeat
         self.prefetch = prefetch
+        self.n_aug_rounds = n_aug_rounds
         self.data = None
         self.val_data = None
         self.test_data = None
@@ -68,17 +69,10 @@ class Data_Loader():
         print("Datasets loaded")
 
     def convert_to_hm(self, keypoints, im_size):
-            heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
-            return heatmaps
+        heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
+        return heatmaps
 
     def resize_images(self, im_size):   
-        def _resize(img, lab):
-            image, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
-            image.set_shape([1,im_size[0],im_size[1]])
-            keypoints = self.convert_to_hm(keypoints, im_size)
-            keypoints.set_shape([40,im_size[0],im_size[1]])
-            return image, keypoints
-
         def _albu_resize(image, keypoints):
             transformed = albu.Compose([albu.Resize(im_size[0], im_size[1])], 
                                        p=1, keypoint_params=albu.KeypointParams(format='xy',remove_invisible=True))(image=image, keypoints=keypoints)
@@ -90,8 +84,15 @@ class Data_Loader():
                 image = np.expand_dims(np.squeeze(image),axis=0) # image = np.reshape(image,(1,image.shape[0],image.shape[1]))
             return image, keypoints
         
-        def convert_all(images, keypoints):
-            return tf.data.Dataset.from_tensors((images,keypoints)).map(_resize)
+        def _resize(img, lab, fn):
+            image, keypoints = tf.numpy_function(_albu_resize, [img, lab], [tf.float32, tf.float32])
+            image.set_shape([1,im_size[0],im_size[1]])
+            keypoints = self.convert_to_hm(keypoints, im_size)
+            keypoints.set_shape([40,im_size[0],im_size[1]])
+            return image, keypoints, fn
+        
+        def convert_all(images, keypoints, filename):
+            return tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_resize)
 
         self.data = self.data.flat_map(convert_all)
 
@@ -114,20 +115,18 @@ class Data_Loader():
             return image, keypoints
           
 
-        def _augment(img, lab):
-            # img_dtype = img.dtype
-            # img_shape = tf.shape(img)
+        def _augment(img, lab, fn):
             image, keypoints = tf.numpy_function(_albu_transform, [img, lab], [tf.float32, tf.float32])
             image.set_shape([1,im_size[0],im_size[1]])
             keypoints = self.convert_to_hm(keypoints, im_size)
             keypoints.set_shape([40,im_size[0],im_size[1]])
-            return image, keypoints
+            return image, keypoints, fn
 
 
-        def generate_augmentations(images, keypoints):
-            regular_ds = tf.data.Dataset.from_tensors((images,keypoints))
-            for _ in range(5): # TODO this is how many rounds of additional images
-                aug_ds = tf.data.Dataset.from_tensors((images,keypoints)).map(_augment)
+        def generate_augmentations(images, keypoints, filename):
+            regular_ds = tf.data.Dataset.from_tensors((images, keypoints, filename))
+            for _ in range(self.n_aug_rounds): 
+                aug_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment)
                 regular_ds.concatenate(aug_ds)
             return regular_ds
         
@@ -147,11 +146,11 @@ class Data_Loader():
         inv_kp_ind = tf.constant(inv_kp_ind, dtype=tf.int32)
 
         @tf.function
-        def resplit(images, keypoints):
+        def resplit(images, keypoints, fn):
             params = tf.concat([images, keypoints], axis=0)
             inp = tf.gather(params, kp_list, axis=0)
             lab = tf.gather(params, inv_kp_ind, axis=0)
-            return tf.data.Dataset.from_tensors((inp, lab))
+            return tf.data.Dataset.from_tensors((inp, lab, fn))
 
 
         self.data = self.data.flat_map(resplit)
@@ -191,7 +190,7 @@ class Data_Loader():
             w = tf.clip_by_value(w,0,3839)
             h = tf.clip_by_value(h,0,3233)
             label = tf.concat([w,h],axis=1)
-            return img, label
+            return img, label, file_name
 
         self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         #self.im_size = decode_image(str(PATH+self.name+'/images/NG-SP196-909-0001.jpg')).shape
