@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser()
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
 
 # Model parameters
@@ -128,6 +128,109 @@ def predict_custom(path, kp_list=None, run_number=None, start_steps=0, kp_metric
         img, lab, fn = next(test)
         store_results(img, lab, unet_model, kp_list, fn, log_path)
 
+def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=False, run_number=None, start_steps=0, kp_metric_margin=3):
+    '''
+    Try a curriculum kind of approach, where we iteratively learn a landmark and then the next, with the solution of the last as input.
+    '''
+    lm_count = 1
+    
+    kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
+    dataset = data.Data_Loader(args.dataset, args.batch_size)
+    dataset()
+    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, ntm=ntm, batch_size=args.batch_size)
+    if start_steps > 0:
+        if start_steps % args.checkpoint_interval != 0:
+            start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
+        log_path, cp_path, cp_dir = load_dir(path, run_number, start_steps)
+        unet_model.load_weights(cp_dir)
+    else:
+        log_path, cp_path = create_dir(path)
+    train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
+    val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
+
+    @tf.function
+    def predict(img):
+        return unet_model(img)
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    train = iter(dataset.data)
+    val = iter(dataset.val_data)
+    train_loss = []
+    val_loss = []
+    train_coord_dist = []
+    val_coord_dist = []
+    mrg = []
+    cgt = []
+    tf.print("Starting train loop...")
+    start_time = time.time()
+    for step in range(start_steps, args.num_training_iterations+1):
+        img, lab, _ = next(train)
+        ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
+        for ep_step in range(dataset.n_landmarks//lm_count-1):
+            with tf.GradientTape() as tape:
+                inp = tf.concat([img, ep_lab], axis=1)
+                pred = predict(inp)
+                ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:] # t label
+                loss = ssd_loss(ep_lab, pred)
+            
+                grad = tape.gradient(loss, unet_model.trainable_weights)
+                optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
+                train_loss.append(loss)
+                train_coord_dist.append(coord_dist(lab, pred))
+        
+        if step % args.report_interval == 0:
+            for _ in range(args.validation_steps):
+                img_v, lab_v, _ = next(val)
+                ep_lab_v = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
+                for ep_step_v in range(dataset.n_landmarks//lm_count-1):
+                    inp_v = tf.concat([img_v, ep_lab_v], axis=1)
+                    ep_lab_v = lab_v[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:] # t label
+                    pred_v = predict(inp_v)
+                    within_margin, closest_to_gt = per_kp_stats(ep_lab_v, pred_v, kp_margin)
+                    mrg.append(within_margin)
+                    cgt.append(closest_to_gt)
+                    val_loss.append(ssd_loss(ep_lab_v, pred_v))
+                    val_coord_dist.append(coord_dist(ep_lab_v, pred_v))
+
+            tl_mean = tf.reduce_mean(train_loss)
+            tcd_mean = tf.reduce_mean(train_coord_dist)
+            vl_mean = tf.reduce_mean(val_loss)
+            vcd_mean = tf.reduce_mean(val_coord_dist)
+            mrg_mean = tf.reduce_mean(mrg, axis=0)
+            cgt_mean = tf.reduce_mean(cgt, axis=0)
+            
+            elapsed_time = int(time.time() - start_time)
+            tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s): Train: ssd: ", tl_mean, ", coord_dist: ", tcd_mean, ", Val: ssd: ", vl_mean, ", coord_dist: ", vcd_mean)
+            tf.print("% within margin: ", mrg_mean, summarize=-1)
+            with open(os.path.join(log_path,'within_margin.txt'), 'ab') as mrgtxt:
+                np.savetxt(mrgtxt, [np.array(mrg_mean)], fmt='%3.3f', delimiter=",")
+            mrgtxt.close()
+            tf.print("% closest to gt", cgt_mean, summarize=-1)
+            with open(os.path.join(log_path,'closest_gt.txt'), 'ab') as cgttxt:
+                np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
+            cgttxt.close()
+            with train_writer.as_default():
+                tf.summary.scalar("ssd_loss", tl_mean, step=step)
+                tf.summary.scalar("coord_dist", tcd_mean, step=step)
+                train_writer.flush()
+            with val_writer.as_default():
+                tf.summary.scalar("ssd_loss", tl_mean, step=step)
+                tf.summary.scalar("coord_dist", vcd_mean, step=step)
+                val_writer.flush()
+            train_loss = []
+            val_loss = []
+            train_coord_dist = []
+            val_coord_dist = []
+            mrg = []
+            cgt = []
+        if step % args.checkpoint_interval == 0:
+            unet_model.save_weights(cp_path.format(step=step))
+            print("saved cp-{:04d}".format(step))
+    # test = iter(dataset.test_data)
+    # for _ in range(args.num_test_samples):
+    #     img, lab, fn = next(test)
+    #     store_results(img, lab, unet_model, kp_list_in, fn, log_path)
+
 def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list_in=None, kp_list_tg=None, ntm=False, run_number=None, start_steps=0, kp_metric_margin=3):
     if kp_list_in == [0]:
         kp_list_in = None
@@ -163,7 +266,7 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list_in
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
         with tf.GradientTape() as tape:
-            img, lab, _ = next(train)
+            img, lab, _ = next(train) 
             pred = predict(img)
             loss = ssd_loss(lab, pred)
         grad = tape.gradient(loss, unet_model.trainable_weights)
@@ -242,7 +345,8 @@ def load_dir(path, run_number, step):
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list_in=None, ntm=True, start_steps=1, run_number=12)
+    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], ntm=True)
+    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list_in=None, ntm=True, start_steps=1, run_number=12)
     # predict_custom(PATH, kp_list=None, start_steps=0, run_number=6)
 
 
