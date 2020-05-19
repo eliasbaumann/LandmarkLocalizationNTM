@@ -6,6 +6,9 @@ import tensorflow as tf
 from ntm import NTMCell
 
 class Encoder_Decoder_Wrapper(tf.keras.layers.Layer):
+    '''
+    Wraps NTMcell in an encoder decoder structure that downsamples and then upsamples the input with the bottleneck being an ntm cell
+    '''
     def __init__(self, num_filters, kernel_size, pool_size, batch_size, name='enc_dec', **kwargs):
         super(Encoder_Decoder_Wrapper, self).__init__(name=name, **kwargs)
         self.num_filters = num_filters
@@ -37,6 +40,43 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.Layer):
         ntm_out, state = self.cell(x, state)
 
         x = tf.reshape(ntm_out, [self.batch_size, 1, 16, 16]) 
+        x = self.conv[2](x)
+        x = self.us(x)
+        x = self.conv[3](x)
+        x = self.us(x)
+        x = self.conv[4](x)
+        return x
+
+
+
+class Encoder_Decoder_Baseline(tf.keras.layers.Layer):
+    '''
+    For comparison, to check what happens if we use an encoder decoder structure at the same position as the ntm
+    '''
+    def __init__(self, num_filters, kernel_size, pool_size, batch_size, name='enc_dec', **kwargs):
+        super(Encoder_Decoder_Wrapper, self).__init__(name=name, **kwargs)
+        self.num_filters = num_filters
+        self.kernel_size = kernel_size
+        self.pool_size = pool_size
+        self.batch_size = batch_size
+        self.conv = [tf.keras.layers.Conv2D(filters=num_filters, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_conv%i'%i) for i in range(5)]
+
+        self.conv_enc = tf.keras.layers.Conv2D(filters=1, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_last_enc')
+        self.ds = tf.keras.layers.AveragePooling2D(pool_size=self.pool_size, strides=self.pool_size, data_format='channels_first', name='enc_dec_ds')
+        self.us = tf.keras.layers.UpSampling2D(size=self.pool_size, data_format='channels_first', name='enc_dec_us')
+
+        self.flat = tf.keras.layers.Flatten(data_format='channels_first', name='enc_dec_flat')
+
+    @tf.function
+    def call(self, inputs):
+        
+        x = self.conv[0](inputs) 
+        x = self.ds(x)
+        x = self.conv[1](x)
+        x = self.ds(x)
+        x = self.conv_enc(x)
+        x = self.flat(x)
+        # TODO intermediate step
         x = self.conv[2](x)
         x = self.us(x)
         x = self.conv[3](x)

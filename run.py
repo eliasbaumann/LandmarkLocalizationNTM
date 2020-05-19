@@ -231,11 +231,11 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
     #     img, lab, fn = next(test)
     #     store_results(img, lab, unet_model, kp_list_in, fn, log_path)
 
-def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, kp_list_in=None, kp_list_tg=None, ntm=False, run_number=None, start_steps=0, kp_metric_margin=3):
+def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, kp_list_tg=None, ntm=False, run_number=None, start_steps=0, kp_metric_margin=3):
     if kp_list_in == [0]:
         kp_list_in = None
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
-    dataset = data.Data_Loader(args.dataset, args.batch_size)
+    dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct)
     dataset(keypoints=kp_list_in)
     len_kp = (len(kp_list_in)-1) if kp_list_in is not None else 0
     unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm=ntm, batch_size=args.batch_size)
@@ -348,6 +348,44 @@ if __name__ == "__main__":
     iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], ntm=True)
     # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list_in=None, ntm=True, start_steps=1, run_number=12)
     # predict_custom(PATH, kp_list=None, start_steps=0, run_number=6)
+
+    # List of experiments:
+    # 1. Baseline (Unet):
+    # 	- Train with full train test split (85/5/10) with all metrics
+
+    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10)
+
+    # 	- Train with 80/70/60/50/40/30/20/10/5 with all metrics?
+    for i in [80,70,60,50,40,30,20,10,5]:
+        train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=i, val_pct=5, test_pct=10)
+
+    # 2. Unet with NTM:
+    # 	- Train with full train test split (80/20)
+
+    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10, ntm=True)
+
+    # 		- compare with slightly larger Unet
+    train_unet_custom(PATH, num_filters=72, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10) # TODO evaluate model size? Needs to be same number of parameters as ntm net
+    # 		- compare with Unet with Encoder Decoder
+    # TODO
+    # 		- Train with 80/70/60/50/40/30/20/10/5 
+    for i in [80,70,60,50,40,30,20,10,5]:
+        train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=i, val_pct=5, test_pct=10, ntm=True)
+    # 	- NTM at different positions (5? positions, then multiple ones?) (80%/5%)
+    # TODO
+    # 	- Different memory sizes (a,b,c,d,e,f)
+    # TODO
+
+    # 3. Give landmarks (5%) (unet, ntm)
+    # 	- 1,2,3,4,5,10,20
+    # 		- random
+    # 		- selective (outline?, left to right?)
+
+    # 4. Iterative learning approach: (5%) (unet, ntm)
+    # 	- Iteratively feed landmarks 
+    # 	- Iterative feed with solution in t+1
+    # 	- batched, not batched
+	
 
 
 # kp_list: 0 is image, remaining numpers are keypoints. If you dont want to include keypoints in input, set to None

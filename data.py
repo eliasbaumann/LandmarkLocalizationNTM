@@ -16,9 +16,12 @@ def decode_image(file_path):
     return img
 
 class Data_Loader():
-    def __init__(self, name, batch_size, repeat=True, prefetch=True, n_aug_rounds=5):
+    def __init__(self, name, batch_size, train_pct=80, val_pct=10, test_pct=10, repeat=True, prefetch=True, n_aug_rounds=5):
         self.name = name
         self.batch_size = batch_size
+        self.train_pct = train_pct
+        self.val_pct = val_pct
+        self.test_pct = test_pct
         self.repeat = repeat
         self.prefetch = prefetch
         self.n_aug_rounds = n_aug_rounds
@@ -26,6 +29,7 @@ class Data_Loader():
         self.val_data = None
         self.test_data = None
         self.n_landmarks = None
+        self.ds_size = None
         self.keypoints = None
         self.augmentations = []
         
@@ -43,12 +47,14 @@ class Data_Loader():
         #self.data = self.data.shuffle(buffer_size=256) #TODO add this for actual runs, 
         
         # train test val split (take and skip)
-        # TODO this is specific for droso:
-        n_train_obs = 352 #total: 471 , chose on dividable by batchsize (8 currently)
+        n_train_obs = self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size)
+        n_val_obs = self.ds_size * (self.val_pct/100.0) - (self.ds_size * (self.val_pct/100.0) % self.batch_size)
+        n_test_obs = self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size)
         train_data = self.data.take(n_train_obs)
         self.test_data = self.data.skip(n_train_obs)
-        self.val_data = self.test_data.take(self.batch_size*4)
-        self.test_data = self.test_data.skip(self.batch_size*4)
+        self.val_data = self.test_data.take(n_val_obs)
+        self.test_data = self.test_data.skip(n_val_obs)
+        self.test_data = self.test_data.take(n_test_obs) 
         self.data = train_data
 
         self.augment_data(im_size)
@@ -176,6 +182,7 @@ class Data_Loader():
 
     def load_droso(self):
         self.n_landmarks = 40
+        self.ds_size = 471
         data_dir = pathlib.Path(PATH+self.name+'/images/')
         list_im = tf.data.Dataset.list_files(str(data_dir)+'*.jpg')
 

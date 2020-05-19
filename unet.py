@@ -38,12 +38,13 @@ class unet2d(tf.keras.Model):
         return res
 
 class unet(tf.keras.layers.Layer):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm=False, batch_size=None, activation=tf.keras.activations.relu, layer=0, name='unet', **kwargs):
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm=False, enc_dec=False, batch_size=None, activation=tf.keras.activations.relu, layer=0, name='unet', **kwargs):
         super(unet, self).__init__(name=name+'_'+str(layer), **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
         self.ntm = ntm
+        self.enc_dec = enc_dec
         self.batch_size = batch_size
         self.activation = activation
         self.layer = layer
@@ -54,9 +55,12 @@ class unet(tf.keras.layers.Layer):
                                   name='unet_left_%i'%self.layer)
         if self.ntm and self.layer==0:
             assert self.batch_size is not None, 'Please set batch_size in unet2d init'
-            self.ntm_enc_dec = Encoder_Decoder_Wrapper(num_filters=64, kernel_size=3, pool_size=4, batch_size=self.batch_size) # TODO batch size is set to 8, change to be alterable
+            self.ntm_enc_dec = Encoder_Decoder_Wrapper(num_filters=64, kernel_size=3, pool_size=4, batch_size=self.batch_size) 
         else:
             self.ntm_enc_dec = None
+
+        if self.enc_dec:
+            
         
         if self.layer >= len(self.downsample_factors)-1:
             self.drop = tf.keras.layers.Dropout(.2,seed=42, name='dropout_%i'%self.layer)
