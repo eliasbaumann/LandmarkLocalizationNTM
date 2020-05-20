@@ -47,9 +47,9 @@ class Data_Loader():
         #self.data = self.data.shuffle(buffer_size=256) #TODO add this for actual runs, 
         
         # train test val split (take and skip)
-        n_train_obs = self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size)
-        n_val_obs = self.ds_size * (self.val_pct/100.0) - (self.ds_size * (self.val_pct/100.0) % self.batch_size)
-        n_test_obs = self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size)
+        n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
+        n_val_obs = int(self.ds_size * (self.val_pct/100.0) - (self.ds_size * (self.val_pct/100.0) % self.batch_size))
+        n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
         train_data = self.data.take(n_train_obs)
         self.test_data = self.data.skip(n_train_obs)
         self.val_data = self.test_data.take(n_val_obs)
