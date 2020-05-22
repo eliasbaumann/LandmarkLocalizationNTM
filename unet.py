@@ -19,19 +19,17 @@ class convnet2d(tf.keras.Model):
 
 
 class unet2d(tf.keras.Model):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, ntm=False, ntm_pos=[0], enc_dec=False, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): #TODO ntm and enc_dec should not be truable at the same time
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, ntm_config=None, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): 
         super(unet2d, self).__init__(name=name, **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
         self.num_landmarks = num_landmarks
-        self.ntm = ntm
-        self.enc_dec = enc_dec
-        self.ntm_pos = ntm_pos
+        self.ntm_config = ntm_config
         self.batch_size = batch_size
         self.training = training
         self.im_size = im_size
-        self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm=self.ntm, ntm_pos=self.ntm_pos, enc_dec=self.enc_dec, batch_size=self.batch_size, im_size=self.im_size)
+        self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, batch_size=self.batch_size, im_size=self.im_size)
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
@@ -41,16 +39,13 @@ class unet2d(tf.keras.Model):
         return res
 
 class unet(tf.keras.layers.Layer):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm=False, ntm_pos=[0], memory_size=64, enc_dec=False, batch_size=None, activation=tf.keras.activations.relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
-        super(unet, self).__init__(name=name+'_'+str(layer), **kwargs)
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.keras.activations.relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
+        super(unet, self).__init__(name=name+'_'+str(layer))
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
-        self.ntm = ntm
-        self.ntm_pos = ntm_pos
-        self.enc_dec = enc_dec
+        self.ntm_config = ntm_config
         self.batch_size = batch_size
-        self.memory_size = memory_size
         self.activation = activation
         self.layer = layer
         self.im_size = im_size
@@ -60,12 +55,14 @@ class unet(tf.keras.layers.Layer):
                                   activation=self.activation,
                                   name='unet_left_%i'%self.layer)
 
-
-        if self.ntm and self.layer in self.ntm_pos:
-            assert self.batch_size is not None, 'Please set batch_size in unet2d init'
-            self.ntm_enc_dec = Encoder_Decoder_Wrapper(num_filters=64, kernel_size=3, pool_size=4, batch_size=self.batch_size, memory_size=self.memory_size, name="ntm_enc_dec_"+str(self.layer)) # TODO parameterizable 
-        elif self.enc_dec and self.layer in self.ntm_pos:
-            self.ntm_enc_dec = Encoder_Decoder_Baseline(num_filters=64, kernel_size=3, pool_size=4, batch_size=self.batch_size, name="enc_dec_"+str(self.layer)) # TODO parameterizable
+        if self.ntm_config is not None:
+            if self.layer in list(map(int, self.ntm_config.keys())):
+                assert self.batch_size is not None, 'Please set batch_size in unet2d init'
+                assert self.ntm_config[str(self.layer)]["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
+                if self.ntm_config[str(self.layer)]["ntm_param"] is not None:
+                    self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="ntm_enc_dec_"+str(self.layer))
+                else:
+                    self.ntm_enc_dec = Encoder_Decoder_Baseline(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="enc_dec_"+str(self.layer)) 
         else:
             self.ntm_enc_dec = None
 
@@ -78,9 +75,7 @@ class unet(tf.keras.layers.Layer):
             self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor,
                                  fmap_inc_factor=self.fmap_inc_factor,
                                  downsample_factors=self.downsample_factors,
-                                 ntm=self.ntm,
-                                 ntm_pos=self.ntm_pos,
-                                 enc_dec=self.enc_dec,
+                                 ntm=self.ntm_config,
                                  batch_size=self.batch_size,
                                  activation=self.activation,
                                  layer=self.layer+1,
@@ -102,9 +97,10 @@ class unet(tf.keras.layers.Layer):
     @tf.function
     def call(self, inputs):
         f_left = self.inp_conv(inputs)
-        if self.ntm and self.layer in self.ntm_pos:
-            mem = self.ntm_enc_dec(f_left)
-            f_left = tf.concat([mem, f_left], axis=1)
+        if self.ntm_config is not None:
+            if self.layer in list(map(int, self.ntm_config.keys())):
+                mem = self.ntm_enc_dec(f_left)
+                f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)
@@ -122,7 +118,7 @@ class unet(tf.keras.layers.Layer):
 
     def get_config(self):
         config = super(unet, self).get_config()
-        config.update({'num_fmaps':self.num_fmaps, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm':self.ntm, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
+        config.update({'num_fmaps':self.num_fmaps, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm_config':self.ntm_config, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
         return config
 
         

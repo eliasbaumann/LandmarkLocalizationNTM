@@ -9,23 +9,24 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.Layer):
     '''
     Wraps NTMcell in an encoder decoder structure that downsamples and then upsamples the input with the bottleneck being an ntm cell
     '''
-    def __init__(self, num_filters, kernel_size, pool_size, batch_size, controller_units=256, memory_size=64,memory_vector_dim=256, output_dim=256, read_head_num=3, write_head_num=3, name='enc_dec', **kwargs):
+    def __init__(self, ntm_config, batch_size, name='enc_dec', **kwargs):
         super(Encoder_Decoder_Wrapper, self).__init__(name=name, **kwargs)
-        self.num_filters = num_filters
-        self.kernel_size = kernel_size
-        self.pool_size = pool_size
+        self.num_filters = ntm_config["enc_dec_param"]["num_filters"]
+        self.kernel_size = ntm_config["enc_dec_param"]["kernel_size"]
+        self.pool_size = ntm_config["enc_dec_param"]["pool_size"]
+        self.controller_units = ntm_config["ntm_param"]["controller_units"]
+        self.memory_size = ntm_config["ntm_param"]["memory_size"]
+        self.memory_vector_dim = ntm_config["ntm_param"]["memory_vector_dim"]
+        self.output_dim = ntm_config["ntm_param"]["output_dim"]
+        self.read_head_num = ntm_config["ntm_param"]["read_head_num"]
+        self.write_head_num = ntm_config["ntm_param"]["write_head_num"]
         self.batch_size = batch_size
-        self.controller_units = controller_units
-        self.memory_size = memory_size
-        self.memory_vector_dim = memory_vector_dim
-        self.output_dim = output_dim
-        self.read_head_num = read_head_num
-        self.write_head_num = write_head_num
-        self.conv = [tf.keras.layers.Conv2D(filters=num_filters, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_conv%i'%i) for i in range(len(self.pool_size)*2+1)]
+        self.dim = tf.sqrt(tf.cast(self.output_dim, tf.float32))
+        self.conv = [tf.keras.layers.Conv2D(filters=self.num_filters, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_conv%i'%i) for i in range(len(self.pool_size)*2+1)]
 
         self.conv_enc = tf.keras.layers.Conv2D(filters=1, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_last_enc')
-        self.ds = [tf.keras.layers.AveragePooling2D(pool_size=i, strides=self.pool_size, data_format='channels_first', name='enc_dec_ds') for i in pool_size]
-        self.us = [tf.keras.layers.UpSampling2D(size=i, data_format='channels_first', name='enc_dec_us') for i in pool_size[::-1]]
+        self.ds = [tf.keras.layers.AveragePooling2D(pool_size=i, strides=self.pool_size, data_format='channels_first', name='enc_dec_ds') for i in self.pool_size]
+        self.us = [tf.keras.layers.UpSampling2D(size=i, data_format='channels_first', name='enc_dec_us') for i in self.pool_size[::-1]]
 
         self.flat = tf.keras.layers.Flatten(data_format='channels_first', name='enc_dec_flat')
 
@@ -42,28 +43,28 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.Layer):
         # NTM here
         state = self.cell.get_initial_state(batch_size=self.batch_size, dtype=tf.float32)
         ntm_out, state = self.cell(x, state)
-        dim = tf.sqrt(tf.cast(self.output_dim, tf.float32))
-        x = tf.reshape(ntm_out, [self.batch_size, -1, dim, dim]) # Output_dim always has to have a square root
+        
+        x = tf.reshape(ntm_out, [self.batch_size, -1, self.dim, self.dim]) # Output_dim always has to have a square root
 
         for i in range(len(self.pool_size)):
-            x = self.conv[i+2](x)
+            x = self.conv[i+len(self.pool_size)](x)
             x = self.us[i](x)
-        x = self.conv[len(self.pool_size)](x)
+        x = self.conv[len(self.pool_size)*2](x)
         return x
     
 
-
+# BIG TODO: fix this to match the upper or merge
 class Encoder_Decoder_Baseline(tf.keras.layers.Layer):
     '''
     For comparison, to check what happens if we use an encoder decoder structure at the same position as the ntm
     '''
-    def __init__(self, num_filters, kernel_size, pool_size, batch_size, name='enc_dec', **kwargs):
+    def __init__(self, ntm_config, batch_size, name='enc_dec', **kwargs):
         super(Encoder_Decoder_Baseline, self).__init__(name=name, **kwargs)
-        self.num_filters = num_filters
-        self.kernel_size = kernel_size
-        self.pool_size = pool_size
+        self.num_filters = ntm_config["enc_dec_param"]["num_filters"]
+        self.kernel_size = ntm_config["enc_dec_param"]["kernel_size"]
+        self.pool_size = ntm_config["enc_dec_param"]["pool_size"]
         self.batch_size = batch_size
-        self.conv = [tf.keras.layers.Conv2D(filters=num_filters, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_conv%i'%i) for i in range(5)]
+        self.conv = [tf.keras.layers.Conv2D(filters=self.num_filters, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_conv%i'%i) for i in range(5)]
 
         self.conv_enc = tf.keras.layers.Conv2D(filters=1, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_last_enc')
         self.ds = tf.keras.layers.AveragePooling2D(pool_size=self.pool_size, strides=self.pool_size, data_format='channels_first', name='enc_dec_ds')

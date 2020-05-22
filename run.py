@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser()
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
 
 # Model parameters
@@ -231,14 +231,14 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
     #     img, lab, fn = next(test)
     #     store_results(img, lab, unet_model, kp_list_in, fn, log_path)
 
-def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=[256, 256], train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, kp_list_tg=None, ntm=False, ntm_pos=[0], enc_dec=False, run_number=None, start_steps=0, kp_metric_margin=3):
+def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=[256, 256], train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, kp_list_tg=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     if kp_list_in == [0]:
         kp_list_in = None
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
     dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct)
     dataset(im_size=im_size, keypoints=kp_list_in)
     len_kp = (len(kp_list_in)-1) if kp_list_in is not None else 0
-    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm=ntm, ntm_pos=ntm_pos, enc_dec=enc_dec, batch_size=args.batch_size)
+    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, dataset.n_landmarks-len_kp, ntm_config=ntm_config, batch_size=args.batch_size)
     if start_steps > 0:
         if start_steps % args.checkpoint_interval != 0:
             start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
@@ -345,6 +345,16 @@ def load_dir(path, run_number, step):
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
+    standard_ntm_conf = {"2":{"enc_dec_param":{"num_filters":128,
+                                               "kernel_size":3,
+                                               "pool_size":[2,2]},
+                              "ntm_param":{"controller_units":256,
+                                           "memory_size":64,
+                                           "memory_vector_dim":256,
+                                           "output_dim":256,
+                                           "read_head_num":3,
+                                           "write_head_num":3}}
+                        }
     # iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], ntm=True)
     # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list_in=None, ntm=True, start_steps=1, run_number=12)
     # predict_custom(PATH, kp_list=None, start_steps=0, run_number=6)
@@ -372,7 +382,7 @@ if __name__ == "__main__":
     # for i in [80,70,60,50,40,30,20,10,5]:
     #     train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=i, val_pct=5, test_pct=10, ntm=True)
     # 	- NTM at different positions (5? positions, then multiple ones?) (80%/5%)
-    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10, ntm=True, ntm_pos=[0,1])
+    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)
     # 	- Different memory sizes (a,b,c,d,e,f)
     # TODO
 
