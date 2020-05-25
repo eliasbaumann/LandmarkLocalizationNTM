@@ -34,7 +34,7 @@ class Data_Loader():
         self.augmentations = []
         
 
-    def __call__(self, im_size = [256,256], keypoints=None):
+    def __call__(self, im_size=None, keypoints=None):
         print("Creating Datasets...")
         self.keypoints = keypoints
         if self.name == 'droso':
