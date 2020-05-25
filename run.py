@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+import random
 
 import numpy as np
 import tensorflow as tf
@@ -233,7 +234,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
     #     img, lab, fn = next(test)
     #     store_results(img, lab, unet_model, kp_list_in, fn, log_path)
 
-def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=None, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, kp_list_tg=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
+def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=None, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     assert im_size is not None, "Please provide an image size to which to rescale the input to"
     if kp_list_in == [0]:
         kp_list_in = None
@@ -365,6 +366,7 @@ if __name__ == "__main__":
                         }
 
     # List of experiments:
+    # BIG TODO: check how long a training takes, adjust list of experiments accordingly
     # 1. Baseline (Unet):
     # 	- Train with full train test split (85/5/10) with all metrics
 
@@ -398,9 +400,16 @@ if __name__ == "__main__":
     
 
     # 3. Give landmarks (5%) (unet, ntm)
-    # 	- 1,2,3,4,5,10,20
+        
     # 		- random
-    # 		- selective (outline?, left to right?)
+    for n in [2,5]:            
+        for _ in range(3):
+            rand_kp = random.sample(range(1,40), k=n)
+            train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, kp_list_in=[0]+rand_kp)
+            train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, kp_list_in=[0]+rand_kp, ntm_config=standard_ntm_conf)
+
+    # TODO: maybe one attempt where we select the landmarks?
+    
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iteratively feed landmarks 
