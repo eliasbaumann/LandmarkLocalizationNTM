@@ -131,16 +131,19 @@ def predict_custom(path, kp_list=None, run_number=None, start_steps=0, kp_metric
         img, lab, fn = next(test)
         store_results(img, lab, unet_model, kp_list, fn, log_path)
 
-def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=False, run_number=None, start_steps=0, kp_metric_margin=3):
+    # BIG TODO: fix output of all measures, in particular of closest to gt and withing margin -> fix storage and output print.
+def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     '''
     Try a curriculum kind of approach, where we iteratively learn a landmark and then the next, with the solution of the last as input.
+    lm_count: how many landmarks at once
     '''
-    lm_count = 1
+    
     
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
-    dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset()
-    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, ntm=ntm, batch_size=args.batch_size)
+    dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct)
+    dataset(im_size=im_size)
+
+    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, ntm_config=ntm_config, batch_size=args.batch_size)
     if start_steps > 0:
         if start_steps % args.checkpoint_interval != 0:
             start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
@@ -158,31 +161,41 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     train = iter(dataset.data)
     val = iter(dataset.val_data)
-    train_loss = []
-    val_loss = []
-    train_coord_dist = []
-    val_coord_dist = []
-    mrg = []
-    cgt = []
+    
+    train_loss_lm = []
+    val_loss_lm = []
+    train_coord_dist_lm = []
+    val_coord_dist_lm = []
+    mrg_lm = []
+    cgt_lm = []
     tf.print("Starting train loop...")
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
         img, lab, _ = next(train)
         ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
+        train_loss = []
+        train_coord_dist = []
         for ep_step in range(dataset.n_landmarks//lm_count-1):
             with tf.GradientTape() as tape:
                 inp = tf.concat([img, ep_lab], axis=1)
                 pred = predict(inp)
                 ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:] # t label
-                loss = ssd_loss(ep_lab, pred)
+                loss = ssd_loss(ep_lab, pred) # loss for first lm_count landmarks
             
                 grad = tape.gradient(loss, unet_model.trainable_weights)
                 optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
                 train_loss.append(loss)
                 train_coord_dist.append(coord_dist(lab, pred))
         
+        train_loss_lm.append([train_loss])
+        train_coord_dist_lm.append([train_coord_dist])
+        
         if step % args.report_interval == 0:
             for _ in range(args.validation_steps):
+                val_loss = []
+                val_coord_dist = []
+                mrg = []
+                cgt = []
                 img_v, lab_v, _ = next(val)
                 ep_lab_v = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
                 for ep_step_v in range(dataset.n_landmarks//lm_count-1):
@@ -194,13 +207,18 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
                     cgt.append(closest_to_gt)
                     val_loss.append(ssd_loss(ep_lab_v, pred_v))
                     val_coord_dist.append(coord_dist(ep_lab_v, pred_v))
-
-            tl_mean = tf.reduce_mean(train_loss)
-            tcd_mean = tf.reduce_mean(train_coord_dist)
-            vl_mean = tf.reduce_mean(val_loss)
-            vcd_mean = tf.reduce_mean(val_coord_dist)
-            mrg_mean = tf.reduce_mean(mrg, axis=0)
-            cgt_mean = tf.reduce_mean(cgt, axis=0)
+                
+                val_loss_lm.append([val_loss])
+                val_coord_dist_lm.append([val_coord_dist])
+                mrg_lm.append(mrg)
+                cgt_lm.append(cgt)
+                
+            tl_mean = tf.reduce_mean(train_loss_lm, axis=0)
+            tcd_mean = tf.reduce_mean(train_coord_dist_lm, axis=0)
+            vl_mean = tf.reduce_mean(val_loss_lm, axis=0)
+            vcd_mean = tf.reduce_mean(val_coord_dist_lm, axis=0)
+            mrg_mean = tf.reduce_mean(mrg_lm, axis=0)
+            cgt_mean = tf.reduce_mean(cgt_lm, axis=0)
             
             elapsed_time = int(time.time() - start_time)
             tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s): Train: ssd: ", tl_mean, ", coord_dist: ", tcd_mean, ", Val: ssd: ", vl_mean, ", coord_dist: ", vcd_mean)
@@ -220,12 +238,16 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
                 tf.summary.scalar("ssd_loss", tl_mean, step=step)
                 tf.summary.scalar("coord_dist", vcd_mean, step=step)
                 val_writer.flush()
-            train_loss = []
-            val_loss = []
-            train_coord_dist = []
-            val_coord_dist = []
-            mrg = []
-            cgt = []
+            
+            train_loss_lm = []
+            val_loss_lm = []
+            train_coord_dist_lm = []
+            val_coord_dist_lm = []
+            mrg_lm = [] 
+            cgt_lm = []
+        
+      
+        
         if step % args.checkpoint_interval == 0:
             unet_model.save_weights(cp_path.format(step=step))
             print("saved cp-{:04d}".format(step))
@@ -402,18 +424,18 @@ if __name__ == "__main__":
     # 3. Give landmarks (5%) (unet, ntm)
         
     # 		- random
-    for n in [2,5]:            
-        for _ in range(3):
-            rand_kp = random.sample(range(1,40), k=n)
-            train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, kp_list_in=[0]+rand_kp)
-            train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, kp_list_in=[0]+rand_kp, ntm_config=standard_ntm_conf)
+    # for n in [2,5]:            
+    #     for _ in range(3):
+    #         rand_kp = random.sample(range(1,40), k=n)
+    #         train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, kp_list_in=[0]+rand_kp)
+    #         train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, kp_list_in=[0]+rand_kp, ntm_config=standard_ntm_conf)
 
     # TODO: maybe one attempt where we select the landmarks?
     
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
-    # 	- Iteratively feed landmarks 
     # 	- Iterative feed with solution in t+1
+    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)
     # 	- batched, not batched
 	
 
