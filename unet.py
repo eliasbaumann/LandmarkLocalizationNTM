@@ -1,5 +1,5 @@
 import tensorflow as tf
-from enc_dec import Encoder_Decoder_Wrapper, Encoder_Decoder_Baseline
+from enc_dec import Encoder_Decoder_Wrapper
 
 # TODO: Tasks 
 # - fixed upsampling instead of deconv?? Is in, but needs tryiing
@@ -59,10 +59,7 @@ class unet(tf.keras.layers.Layer):
             if self.layer in list(map(int, self.ntm_config.keys())):
                 assert self.batch_size is not None, 'Please set batch_size in unet2d init'
                 assert self.ntm_config[str(self.layer)]["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
-                if self.ntm_config[str(self.layer)]["ntm_param"] is not None:
-                    self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="ntm_enc_dec_"+str(self.layer))
-                else:
-                    self.ntm_enc_dec = Encoder_Decoder_Baseline(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="enc_dec_"+str(self.layer)) 
+                self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="ntm_enc_dec_"+str(self.layer))
         else:
             self.ntm_enc_dec = None
 

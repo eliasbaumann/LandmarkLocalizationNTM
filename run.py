@@ -10,6 +10,8 @@ import cv2
 import data
 import unet
 
+from ntm_configs import CONF_POS_LIST, CONF_MEM_LIST
+
 parser = argparse.ArgumentParser()
 
 # Task
@@ -110,7 +112,7 @@ def store_results(img, label, model, kp_list, fn, path):
 
 def predict_custom(path, kp_list=None, run_number=None, start_steps=0, kp_metric_margin=3):
     if start_steps % args.checkpoint_interval != 0:
-            start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
+        start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
     if kp_list == [0]:
         kp_list = None
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
@@ -231,7 +233,8 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, ntm=Fal
     #     img, lab, fn = next(test)
     #     store_results(img, lab, unet_model, kp_list_in, fn, log_path)
 
-def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=[256, 256], train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, kp_list_tg=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
+def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=None, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, kp_list_tg=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
+    assert im_size is not None, "Please provide an image size to which to rescale the input to"
     if kp_list_in == [0]:
         kp_list_in = None
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
@@ -345,9 +348,9 @@ def load_dir(path, run_number, step):
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    standard_ntm_conf = {"2":{"enc_dec_param":{"num_filters":128,
+    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":256,
                                                "kernel_size":3,
-                                               "pool_size":[2,2]},
+                                               "pool_size":[4,4]},
                               "ntm_param":{"controller_units":256,
                                            "memory_size":64,
                                            "memory_vector_dim":256,
@@ -355,36 +358,44 @@ if __name__ == "__main__":
                                            "read_head_num":3,
                                            "write_head_num":3}}
                         }
-    # iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], ntm=True)
-    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], kp_list_in=None, ntm=True, start_steps=1, run_number=12)
-    # predict_custom(PATH, kp_list=None, start_steps=0, run_number=6)
+    standard_ed_conf = {"0":{"enc_dec_param":{"num_filters":256,
+                                               "kernel_size":3,
+                                               "pool_size":[4,4]},
+                              "ntm_param":None}
+                        }
 
     # List of experiments:
     # 1. Baseline (Unet):
     # 	- Train with full train test split (85/5/10) with all metrics
 
-    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10)
+    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=85, val_pct=5, test_pct=10)
 
     # 	- Train with 80/70/60/50/40/30/20/10/5 with all metrics?
     # for i in [80,70,60,50,40,30,20,10,5]:
-    #     train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=i, val_pct=5, test_pct=10)
+    #     train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256, 256], train_pct=i, val_pct=5, test_pct=10)
 
-    # 2. Unet with NTM:
+    # 2. Unet with NTM: # NOTE: given that there is not best baseline for this whole thing, we simply define one and then compare against that
     # 	- Train with full train test split (80/20)
 
-    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10, ntm=True)
+    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]],im_size=[256, 256], train_pct=85, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)
 
     # 		- compare with slightly larger Unet
-    # train_unet_custom(PATH, num_filters=72, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10) # TODO evaluate model size? Needs to be same number of parameters as ntm net
+    # train_unet_custom(PATH, num_filters=72, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256,256], train_pct=85, val_pct=5, test_pct=10) # TODO evaluate model size? Needs to be same number of parameters as ntm net
     # 		- compare with Unet with Encoder Decoder
-    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10, enc_dec=True)
+    # train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256,256], train_pct=85, val_pct=5, test_pct=10, ntm_config=standard_ed_conf)
+    # 	- NTM at different positions (5? positions, then multiple ones?) (80%/5%)
+    # for i in [85, 5]:
+    #     for j in CONF_POS_LIST:
+    #         train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256,256], train_pct=i, val_pct=5, test_pct=10, ntm_conf=j)
+    # - Different memory sizes (a,b,c,d,e,f)
+    #     for k in CONF_MEM_LIST:
+    #         train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256,256], train_pct=i, val_pct=5, test_pct=10, ntm_conf=k)
+    # TODO pick best POS
+
     # 		- Train with 80/70/60/50/40/30/20/10/5 
     # for i in [80,70,60,50,40,30,20,10,5]:
-    #     train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=i, val_pct=5, test_pct=10, ntm=True)
-    # 	- NTM at different positions (5? positions, then multiple ones?) (80%/5%)
-    train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], train_pct=85, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)
-    # 	- Different memory sizes (a,b,c,d,e,f)
-    # TODO
+    #     train_unet_custom(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], im_size=[256,256], train_pct=i, val_pct=5, test_pct=10, ntm_conf=standard_ntm_conf)
+    
 
     # 3. Give landmarks (5%) (unet, ntm)
     # 	- 1,2,3,4,5,10,20
