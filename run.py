@@ -71,19 +71,35 @@ def coord_dist(y_true, y_pred):
 
 @tf.function
 def get_max_indices(logits):
+    '''
+    Returns coordinates for maximum values per axis 1 (for N,C,H,W input)
+    '''
     coords = tf.squeeze(tf.where(tf.equal(logits, tf.reduce_max(logits))))
     coords = tf.cond(tf.greater(tf.rank(coords),tf.constant(1)),true_fn=lambda:tf.gather(coords,0),false_fn=lambda:coords)
     return tf.cast(coords, tf.float32)
 
 @tf.function
-def per_kp_stats(y_true, y_pred, margin):
+def per_kp_stats(y_true, y_pred, margin): # input_shape: (batch_size, n_landmarks, im_size, im_size)
     y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred)
     y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true)
     exp_y_pred = tf.expand_dims(y_pred, 1)
     exp_y_true = tf.expand_dims(y_true, 2)
-    exp_closest = tf.argmin(tf.reduce_mean(tf.square(tf.abs(tf.subtract(exp_y_pred, exp_y_true))), axis=-1), axis=-1)
-    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(tf.cast(exp_closest, dtype=tf.int32), tf.range(tf.shape(exp_closest)[-1], dtype=tf.int32)), dtype=tf.float32), axis=0)
-    within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0)
+    exp_closest = tf.argmin(tf.reduce_mean(tf.square(tf.abs(tf.subtract(exp_y_pred, exp_y_true))), axis=-1), axis=-1) # get index of closest landmark
+    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(tf.cast(exp_closest, dtype=tf.int32), tf.range(tf.shape(exp_closest)[-1], dtype=tf.int32)), dtype=tf.float32), axis=0) # check if that closest landmark is the target
+    within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0) # check distance of pred to target and if its within margin
+    return within_margin, closest_to_nearest
+
+@tf.function
+def per_kp_stats_iter(y_true, y_pred, y_true_full, margin):
+    y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred) # (4, 1, 2)
+    y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true) # (4, 1, 2)
+    y_true_full = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true_full) # (4, 40, 2)
+    exp_y_pred = tf.expand_dims(y_pred, 1)
+    exp_y_true_full = tf.expand_dims(y_true_full, 2)
+    exp_closest = tf.argmin(tf.squeeze(tf.reduce_mean(tf.square(tf.subtract(exp_y_pred, exp_y_true_full)), axis=-1)), axis=-1)
+    cur_index = tf.reduce_mean(tf.where(tf.reduce_all(tf.equal(y_true, y_true_full), axis=-1))[:,-1])
+    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(cur_index, exp_closest), tf.float32))
+    within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32))
     return within_margin, closest_to_nearest
 
 @tf.function
@@ -202,7 +218,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                     inp_v = tf.concat([img_v, ep_lab_v], axis=1)
                     ep_lab_v = lab_v[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:] # t label
                     pred_v = predict(inp_v)
-                    within_margin, closest_to_gt = per_kp_stats(ep_lab_v, pred_v, kp_margin)
+                    within_margin, closest_to_gt = per_kp_stats_iter(ep_lab_v, pred_v, lab_v, kp_margin) # TODO: returns single values now, fix appropriately
                     mrg.append(within_margin)
                     cgt.append(closest_to_gt)
                     val_loss.append(ssd_loss(ep_lab_v, pred_v))
