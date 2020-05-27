@@ -147,7 +147,6 @@ def predict_custom(path, kp_list=None, run_number=None, start_steps=0, kp_metric
         img, lab, fn = next(test)
         store_results(img, lab, unet_model, kp_list, fn, log_path)
 
-    # BIG TODO: fix output of all measures, in particular of closest to gt and withing margin -> fix storage and output print.
 def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     '''
     Try a curriculum kind of approach, where we iteratively learn a landmark and then the next, with the solution of the last as input.
@@ -216,7 +215,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 ep_lab_v = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
                 for ep_step_v in range(dataset.n_landmarks//lm_count-1):
                     inp_v = tf.concat([img_v, ep_lab_v], axis=1)
-                    ep_lab_v = lab_v[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:] # t label
+                    ep_lab_v = lab_v[:,ep_step_v*lm_count:(ep_step_v+1)*lm_count,:,:] # t label
                     pred_v = predict(inp_v)
                     within_margin, closest_to_gt = per_kp_stats_iter(ep_lab_v, pred_v, lab_v, kp_margin) # TODO: returns single values now, fix appropriately
                     mrg.append(within_margin)
@@ -229,32 +228,39 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 mrg_lm.append(mrg)
                 cgt_lm.append(cgt)
                 
-            tl_mean = tf.reduce_mean(train_loss_lm, axis=0)
-            tcd_mean = tf.reduce_mean(train_coord_dist_lm, axis=0)
-            vl_mean = tf.reduce_mean(val_loss_lm, axis=0)
-            vcd_mean = tf.reduce_mean(val_coord_dist_lm, axis=0)
-            mrg_mean = tf.reduce_mean(mrg_lm, axis=0)
-            cgt_mean = tf.reduce_mean(cgt_lm, axis=0)
+            tl_mean = tf.squeeze(tf.reduce_mean(train_loss_lm, axis=0))
+            tcd_mean = tf.squeeze(tf.reduce_mean(train_coord_dist_lm, axis=0))
+            vl_mean = tf.squeeze(tf.reduce_mean(val_loss_lm, axis=0))
+            vcd_mean = tf.squeeze(tf.reduce_mean(val_coord_dist_lm, axis=0))
+            mrg_mean = tf.squeeze(tf.reduce_mean(mrg_lm, axis=0))
+            cgt_mean = tf.squeeze(tf.reduce_mean(cgt_lm, axis=0))
             
             elapsed_time = int(time.time() - start_time)
-            tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s): Train: ssd: ", tl_mean, ", coord_dist: ", tcd_mean, ", Val: ssd: ", vl_mean, ", coord_dist: ", vcd_mean)
+            tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
+            
+            tf.print("train loss (ssd): ", tl_mean, summarize=-1)
+            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tltxt:
+                np.savetxt(tltxt, [np.array(tl_mean)], fmt='%.3f', delimiter=",")
+            tf.print("train coordinate distance: ", tcd_mean, summarize=-1)
+            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tcdtxt:
+                np.savetxt(tcdtxt, [np.array(tcd_mean)], fmt='%.3f', delimiter=",")
+            
+            tf.print("validation loss (ssd): ", vl_mean, summarize=-1)
+            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as vltxt:
+                np.savetxt(vltxt, [np.array(vl_mean)], fmt='%.3f', delimiter=",")
+            tf.print("validation coordinate distance: ", vcd_mean, summarize=-1)
+            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as vcdtxt:
+                np.savetxt(vcdtxt, [np.array(vcd_mean)], fmt='%.3f', delimiter=",")
+
             tf.print("% within margin: ", mrg_mean, summarize=-1)
-            with open(os.path.join(log_path,'within_margin.txt'), 'ab') as mrgtxt:
+            with open(os.path.join(log_path, 'within_margin.txt'), 'ab') as mrgtxt:
                 np.savetxt(mrgtxt, [np.array(mrg_mean)], fmt='%3.3f', delimiter=",")
             mrgtxt.close()
             tf.print("% closest to gt", cgt_mean, summarize=-1)
-            with open(os.path.join(log_path,'closest_gt.txt'), 'ab') as cgttxt:
+            with open(os.path.join(log_path, 'closest_gt.txt'), 'ab') as cgttxt:
                 np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
             cgttxt.close()
-            with train_writer.as_default():
-                tf.summary.scalar("ssd_loss", tl_mean, step=step)
-                tf.summary.scalar("coord_dist", tcd_mean, step=step)
-                train_writer.flush()
-            with val_writer.as_default():
-                tf.summary.scalar("ssd_loss", tl_mean, step=step)
-                tf.summary.scalar("coord_dist", vcd_mean, step=step)
-                val_writer.flush()
-            
+
             train_loss_lm = []
             val_loss_lm = []
             train_coord_dist_lm = []
@@ -347,7 +353,7 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=No
                 tf.summary.scalar("coord_dist", tcd_mean, step=step)
                 train_writer.flush()
             with val_writer.as_default():
-                tf.summary.scalar("ssd_loss", tl_mean, step=step)
+                tf.summary.scalar("ssd_loss", vl_mean, step=step)
                 tf.summary.scalar("coord_dist", vcd_mean, step=step)
                 val_writer.flush()
             train_loss = []
