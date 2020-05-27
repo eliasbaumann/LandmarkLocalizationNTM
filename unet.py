@@ -29,16 +29,34 @@ class unet2d(tf.keras.Model):
         self.batch_size = batch_size
         self.training = training
         self.im_size = im_size
-        self.unet = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, batch_size=self.batch_size, im_size=self.im_size)
+        self.unet_rec = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, batch_size=self.batch_size, im_size=self.im_size)
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
-        unet_2d = self.unet(inputs)
+        unet_2d = self.unet_rec(inputs)
         res = self.logits(unet_2d) # TODO payer et al do no activation ?
         return res
 
-class unet(tf.keras.layers.Layer):
+    # #TODO maybe shit workaround for tensorflow shittyness
+    # def setup_initial_ntm_states(self):
+    #     if self.ntm_config == None:
+    #         ntm_conf = {}
+    #     else:
+    #         ntm_conf = self.ntm_config
+        
+    #     states = []
+    #     model = self
+    #     for i in range(len(self.downsample_factors)):
+    #         if i in list(map(int, ntm_conf.keys())):
+    #             states.append(model.unet_rec.get_initial_state(self.batch_size))
+    #         else:
+    #             states.append(None)
+    #         model = model.unet_rec
+    #     return states
+    
+
+class unet(tf.keras.layers.AbstractRNNCell):
     def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.keras.activations.relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
         super(unet, self).__init__(name=name+'_'+str(layer))
         self.num_fmaps = num_fmaps
@@ -117,6 +135,12 @@ class unet(tf.keras.layers.Layer):
         config = super(unet, self).get_config()
         config.update({'num_fmaps':self.num_fmaps, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm_config':self.ntm_config, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
         return config
+
+    @tf.function
+    def get_initial_state(self, batch_size):
+        state = self.ntm_enc_dec.cell.get_initial_state(batch_size)
+        return state
+
 
         
 

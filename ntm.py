@@ -174,7 +174,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             return tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
     @tf.function
-    def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
+    def get_initial_state(self, batch_size=None):
         initial_state = NTMControllerState(
             controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=batch_size),
                                  self._expand(tf.tanh(self.init_carry_state), dim=0, N=batch_size)],
