@@ -3,8 +3,6 @@ import numpy as np
 
 import collections
 
-NTMControllerState = collections.namedtuple('NTMControllerState', ('controller_state', 'read_list', 'w_list', 'M'))
-
 
 def create_linear_initializer(input_size):
     stddev = 1.0 / np.sqrt(input_size)
@@ -16,7 +14,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
     memory_mode: 'matrix' -> store matrices, 'embedding' -> create embedding and store
     '''
-    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
+    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
                  init_mode='constant', memory_mode='encoder', name='ntm_cell'):
         super(NTMCell, self).__init__(name=name)
@@ -31,6 +29,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.reuse = reuse
         self.clip_value = clip_value
         self.num_heads = self.read_head_num+self.write_head_num
+        self.batch_size = batch_size
 
 
         self._ds = tf.keras.layers.MaxPooling2D(pool_size=(8,8), name='ntm_pool2d')
@@ -88,19 +87,25 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     
     @tf.function
     def call(self, x, prev_state):
-        prev_read_list = prev_state.read_list
+        #prev_state = NTMControllerState(prev_state[0],prev_state[1],prev_state[2],prev_state[3])
+        prev_read_list = prev_state["read_list"]
+        #prev_read_list.set_shape([self.read_head_num, self.batch_size, self.memory_vector_dim])
 
-        controller_input = tf.concat([x] + prev_read_list, axis=1, name='concat_ctrl_inp') #TODO this likely wont work, change when you fully understand whats happening
+        controller_input = tf.concat([x]+prev_read_list, axis=1, name='concat_ctrl_inp')
+        controller_state = prev_state["controller_state"]
+        # controller_state.set_shape([2, self.batch_size, self.controller_units])
 
-        controller_output, controller_state = self._controller(controller_input, prev_state.controller_state)
+        controller_output, controller_state = self._controller(controller_input, controller_state)
         parameters = self.o2p(controller_output)
         parameters = tf.clip_by_value(parameters, -self.clip_value, self.clip_value)
 
         head_parameter_list = tf.split(parameters[:, :self.num_params_per_head * self.num_heads], self.num_heads, axis=1)
         erase_add_list = tf.split(parameters[:, self.num_params_per_head * self.num_heads:], 2 * self.write_head_num, axis=1)
 
-        prev_w_list = prev_state.w_list
-        prev_M = prev_state.M
+        prev_w_list = prev_state["w_list"]
+        # prev_w_list.set_shape([self.read_head_num + self.write_head_num, self.batch_size, self.memory_size])
+        prev_M = prev_state["M"]
+        # prev_M.set_shape([self.batch_size, self.memory_size, self.memory_vector_dim])
         w_list = []
         
         # create params
@@ -129,7 +134,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1, name='concat_ntm_out'))
         ntm_output = tf.clip_by_value(ntm_output, -self.clip_value, self.clip_value)
         self.step += 1
-        return ntm_output, NTMControllerState(controller_state=controller_state, read_list=read_vector_list, w_list=w_list, M=M)
+        return ntm_output, {"controller_state":controller_state,"read_list":read_vector_list,"w_list":w_list,"M":M} #NTMControllerState(controller_state=controller_state, read_list=read_vector_list, w_list=w_list, M=M)
     
     @tf.function
     def _addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
@@ -174,16 +179,15 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             return tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
     @tf.function
-    def get_initial_state(self, batch_size=None):
-        initial_state = NTMControllerState(
-            controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=batch_size),
-                                 self._expand(tf.tanh(self.init_carry_state), dim=0, N=batch_size)],
-            read_list=[self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=batch_size)
-                                 for i in range(self.read_head_num)],
-            w_list=[self._expand(tf.nn.softmax(self.init_w[i]), dim=0, N=batch_size)
-                       for i in range(self.read_head_num + self.write_head_num)],
-            M=self._expand(tf.tanh(self.init_M), dim=0, N=batch_size))
-        return initial_state
+    def get_initial_state(self):
+        controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=self.batch_size),
+                                 self._expand(tf.tanh(self.init_carry_state), dim=0, N=self.batch_size)]
+        read_list=[self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=self.batch_size)
+                                for i in range(self.read_head_num)]
+        w_list=[self._expand(tf.nn.softmax(self.init_w[i]), dim=0, N=self.batch_size)
+                    for i in range(self.read_head_num + self.write_head_num)]
+        M=self._expand(tf.tanh(self.init_M), dim=0, N=self.batch_size)
+        return {"controller_state":controller_state,"read_list":read_list,"w_list":w_list,"M":M}
 
     @tf.function
     def _expand(self, x, dim, N):
@@ -192,14 +196,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     @tf.function
     def _learned_init(self, units):
         return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None, name='learned_init')(tf.ones([1, 1])))
-
-    @property
-    def state_size(self):
-        return NTMControllerState(
-            controller_state=self.controller.state_size,
-            read_vector_list=[self.memory_vector_dim for _ in range(self.read_head_num)],
-            w_list=[self.memory_size for _ in range(self.read_head_num + self.write_head_num)],
-            M=tf.TensorShape([self.memory_size * self.memory_vector_dim]))
 
     @property
     def output_size(self):
