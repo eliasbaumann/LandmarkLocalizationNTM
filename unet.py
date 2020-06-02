@@ -34,27 +34,24 @@ class unet2d(tf.keras.Model):
 
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
-        unet_2d = self.unet_rec(inputs)
+        if self.ntm_config is not None:
+            # states = tf.queue.FIFOQueue(capacity=len(self.ntm_config), dtypes=[tf.float32,tf.float32,tf.float32,tf.float32], names=['controller_state', 'read_list', 'w_list', 'M'])
+            _unet = self.unet_rec
+            while _unet is not None:
+                if _unet.ntm_enc_dec is not None:
+                    state = _unet.get_initial_state()
+                    break
+                _unet = _unet.unet_rec
+        else:
+            state = None
+        # res = tf.TensorArray(dtype=tf.float32, size=seq_len)
+        # TODO iterative loop over one image has to happen here?
+        unet_2d, state = self.unet_rec(inputs, state)
         res = self.logits(unet_2d) # TODO payer et al do no activation ?
         return res
 
-    # #TODO maybe shit workaround for tensorflow shittyness
-    # def setup_initial_ntm_states(self):
-    #     if self.ntm_config == None:
-    #         ntm_conf = {}
-    #     else:
-    #         ntm_conf = self.ntm_config
-        
-    #     states = []
-    #     model = self
-    #     for i in range(len(self.downsample_factors)):
-    #         if i in list(map(int, ntm_conf.keys())):
-    #             states.append(model.unet_rec.get_initial_state(self.batch_size))
-    #         else:
-    #             states.append(None)
-    #         model = model.unet_rec
-    #     return states
-    
+
+
 
 class unet(tf.keras.layers.AbstractRNNCell):
     def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.keras.activations.relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
@@ -110,26 +107,26 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.out_conv = None
     
     @tf.function
-    def call(self, inputs):
+    def call(self, inputs, state):
         f_left = self.inp_conv(inputs)
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
-                mem = self.ntm_enc_dec(f_left)
+                mem, state = self.ntm_enc_dec(f_left, state)
                 f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)
-            return f_left
+            return f_left, state
         # to add dropout to second to last layer as well: 
         elif self.layer == len(self.downsample_factors)-1:
             f_left = self.drop(f_left)
         g_in = self.ds(f_left)
-        g_out = self.unet_rec(g_in)
+        g_out, state = self.unet_rec(g_in, state)        
         g_out_upsampled = self.us(g_out)
         f_left_cropped = self.crop(f_left, tf.shape(g_out_upsampled))
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
         f_out = self.out_conv(f_right)
-        return f_out
+        return f_out, state
 
     def get_config(self):
         config = super(unet, self).get_config()
@@ -137,8 +134,8 @@ class unet(tf.keras.layers.AbstractRNNCell):
         return config
 
     @tf.function
-    def get_initial_state(self, batch_size):
-        state = self.ntm_enc_dec.cell.get_initial_state(batch_size)
+    def get_initial_state(self):
+        state = self.ntm_enc_dec.cell.get_initial_state()
         return state
 
 
