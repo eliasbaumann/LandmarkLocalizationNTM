@@ -22,7 +22,7 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
             self.read_head_num = ntm_config["ntm_param"]["read_head_num"]
             self.write_head_num = ntm_config["ntm_param"]["write_head_num"]
             
-            self.cell = NTMCell(controller_units=self.controller_units, memory_size=self.memory_size, memory_vector_dim=self.memory_vector_dim, read_head_num=self.read_head_num, write_head_num=self.write_head_num, output_dim=self.output_dim) 
+            self.cell = NTMCell(controller_units=self.controller_units, memory_size=self.memory_size, memory_vector_dim=self.memory_vector_dim, read_head_num=self.read_head_num, write_head_num=self.write_head_num, output_dim=self.output_dim, batch_size=batch_size) 
         else:
             self.controller_units = None
             self.memory_size = None
@@ -47,7 +47,7 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
         
 
     @tf.function
-    def call(self, x):
+    def call(self, x, prev_state):
         for i in range(len(self.pool_size)):
             x = self.conv[i](x)
             x = self.ds[i](x)
@@ -56,13 +56,13 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
         # NTM here
         if self.cell is not None:
             x = self.flat(x)
-            state = self.cell.get_initial_state(self.batch_size)
-            ntm_out, state = self.cell(x, state)
+            # state = self.cell.get_initial_state(self.batch_size)
+            ntm_out, prev_state = self.cell(x, prev_state)
             x = tf.reshape(ntm_out, [self.batch_size, -1, self.dim, self.dim]) # Output_dim always has to have a square root
 
         for i in range(len(self.pool_size)):
             x = self.conv[i+len(self.pool_size)](x)
             x = self.us[i](x)
         x = self.conv[len(self.pool_size)*2](x)
-        return x
+        return x, prev_state
 
