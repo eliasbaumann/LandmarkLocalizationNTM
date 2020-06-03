@@ -408,6 +408,25 @@ if __name__ == "__main__":
                                                "pool_size":[4,4]},
                               "ntm_param":None}
                         }
+    conf_pos02={"0":{"enc_dec_param":{"num_filters":256,
+                                               "kernel_size":3,
+                                               "pool_size":[4,4]},
+                              "ntm_param":{"controller_units":256,
+                                           "memory_size":64,
+                                           "memory_vector_dim":256,
+                                           "output_dim":256,
+                                           "read_head_num":3,
+                                           "write_head_num":3}},
+            "2":{"enc_dec_param":{"num_filters":256,
+                                               "kernel_size":3,
+                                               "pool_size":[2,2]},
+                              "ntm_param":{"controller_units":256,
+                                           "memory_size":64,
+                                           "memory_vector_dim":256,
+                                           "output_dim":256,
+                                           "read_head_num":3,
+                                           "write_head_num":3}}
+}
 
     # List of experiments:
     # BIG TODO: check how long a training takes, adjust list of experiments accordingly
@@ -457,7 +476,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)
+    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, ntm_config=conf_pos02)
     # 	- batched, not batched
 	
 

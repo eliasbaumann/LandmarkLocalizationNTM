@@ -34,19 +34,23 @@ class unet2d(tf.keras.Model):
 
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
+        states = []
         if self.ntm_config is not None:
             # states = tf.queue.FIFOQueue(capacity=len(self.ntm_config), dtypes=[tf.float32,tf.float32,tf.float32,tf.float32], names=['controller_state', 'read_list', 'w_list', 'M'])
             _unet = self.unet_rec
             while _unet is not None:
                 if _unet.ntm_enc_dec is not None:
                     state = _unet.get_initial_state()
-                    break
+                    states.append(state)
+                else:
+                    states.append(tf.constant([0.]))
                 _unet = _unet.unet_rec
         else:
             state = None
+        states = tf.ragged.stack(states, axis=0)
         # res = tf.TensorArray(dtype=tf.float32, size=seq_len)
         # TODO iterative loop over one image has to happen here?
-        unet_2d, state = self.unet_rec(inputs, state)
+        unet_2d, states = self.unet_rec(inputs, states)
         res = self.logits(unet_2d) # TODO payer et al do no activation ?
         return res
 
@@ -69,15 +73,13 @@ class unet(tf.keras.layers.AbstractRNNCell):
                                   num_repetitions=2,
                                   activation=self.activation,
                                   name='unet_left_%i'%self.layer)
-
+        self.ntm_enc_dec = None
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
                 assert self.batch_size is not None, 'Please set batch_size in unet2d init'
                 assert self.ntm_config[str(self.layer)]["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
                 self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="ntm_enc_dec_"+str(self.layer))
-        else:
-            self.ntm_enc_dec = None
-
+        
         if self.layer >= len(self.downsample_factors)-1:
             self.drop = tf.keras.layers.Dropout(.2,seed=42, name='dropout_%i'%self.layer)
         else:
@@ -87,7 +89,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor,
                                  fmap_inc_factor=self.fmap_inc_factor,
                                  downsample_factors=self.downsample_factors,
-                                 ntm=self.ntm_config,
+                                 ntm_config=self.ntm_config,
                                  batch_size=self.batch_size,
                                  activation=self.activation,
                                  layer=self.layer+1,
@@ -107,11 +109,12 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.out_conv = None
     
     @tf.function
-    def call(self, inputs, state):
+    def call(self, inputs, states):
         f_left = self.inp_conv(inputs)
+        state = states[self.layer]
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
-                mem, state = self.ntm_enc_dec(f_left, state)
+                mem, state = self.ntm_enc_dec(f_left, states[self.layer])
                 f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
@@ -121,12 +124,15 @@ class unet(tf.keras.layers.AbstractRNNCell):
         elif self.layer == len(self.downsample_factors)-1:
             f_left = self.drop(f_left)
         g_in = self.ds(f_left)
-        g_out, state = self.unet_rec(g_in, state)        
+        g_out, state_rec = self.unet_rec(g_in, states)
+
+        ret_state = tf.concat([state,state_rec], axis=0)
+
         g_out_upsampled = self.us(g_out)
         f_left_cropped = self.crop(f_left, tf.shape(g_out_upsampled))
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
         f_out = self.out_conv(f_right)
-        return f_out, state
+        return f_out, ret_state
 
     def get_config(self):
         config = super(unet, self).get_config()
