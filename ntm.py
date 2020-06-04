@@ -94,11 +94,11 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     @tf.function
     def call(self, x, prev_state):
         
-
+        # TODO make this work with raggedTensor not being reshaped by this call:
         controller_state = tf.reshape(prev_state[:self.ctrl_ind], [2,self.batch_size,self.controller_units])
         prev_read_list = tf.reshape(prev_state[self.ctrl_ind:self.ctrl_ind+self.readl_ind], [self.batch_size, self.read_head_num * self.memory_vector_dim])
         prev_w_list = tf.reshape(prev_state[self.ctrl_ind+self.readl_ind:self.ctrl_ind+self.readl_ind+self.writl_ind], [self.read_head_num+self.write_head_num, self.batch_size, self.memory_size])
-        prev_M = tf.reshape(prev_state[self.ctrl_ind+self.readl_ind+self.writl_ind:self.ctrl_ind+self.readl_ind+self.writl_ind+self.m_ind], [self.batch_size, self.memory_size, self.memory_vector_dim])
+        prev_M = tf.reshape(prev_state[-self.m_ind:], [self.batch_size, self.memory_size, self.memory_vector_dim]) # TODO check if this is correct, also reshape correct?
         #prev_state = NTMControllerState(prev_state[0],prev_state[1],prev_state[2],prev_state[3])
         # prev_read_list = prev_state["read_list"]
         #prev_read_list.set_shape([self.read_head_num, self.batch_size, self.memory_vector_dim])

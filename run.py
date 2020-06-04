@@ -46,6 +46,7 @@ parser.add_argument('--checkpoint_interval', type=int, default=1000,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
+tf.config.experimental_run_functions_eagerly(True)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy()
@@ -186,21 +187,23 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     tf.print("Starting train loop...")
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
-        img, lab, _ = next(train)
-        ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
+        img, lab, _ = next(train) # img shape: 4,1,256,256, lab shape: 4,40,256,256
+        ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
+        inp = tf.TensorArray(dtype=tf.float32, size=dataset.n_landmarks)
+        for ep_step in range(dataset.n_landmarks//lm_count):
+            inp = inp.write(ep_step, tf.concat([img, ep_lab], axis=1))
+            ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
         train_loss = []
         train_coord_dist = []
-        for ep_step in range(dataset.n_landmarks//lm_count-1):
-            with tf.GradientTape() as tape:
-                inp = tf.concat([img, ep_lab], axis=1)
-                pred = predict(inp)
-                ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:] # t label
-                loss = ssd_loss(ep_lab, pred) # loss for first lm_count landmarks
-            
-                grad = tape.gradient(loss, unet_model.trainable_weights)
-                optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
-                train_loss.append(loss)
-                train_coord_dist.append(coord_dist(lab, pred))
+    
+        with tf.GradientTape() as tape:
+            pred = predict(inp.stack())
+            loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
+        
+            grad = tape.gradient(loss, unet_model.trainable_weights)
+            optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
+            train_loss.append(loss)
+            train_coord_dist.append(coord_dist(lab, pred))
         
         train_loss_lm.append([train_loss])
         train_coord_dist_lm.append([train_coord_dist])
