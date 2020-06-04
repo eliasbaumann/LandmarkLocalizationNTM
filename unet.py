@@ -41,13 +41,13 @@ class unet2d(tf.keras.Model):
             while _unet is not None:
                 if _unet.ntm_enc_dec is not None:
                     state = _unet.get_initial_state()
-                    states.append(tf.expand_dims(state, axis=0))
+                    states.append(tf.RaggedTensor.from_tensor(tf.expand_dims(state, axis=0)))
                 else:
-                    states.append(tf.constant([[0.]]))
+                    states.append(tf.ragged.constant([[0.]]))
                 _unet = _unet.unet_rec
         else:
             state = None
-        states = tf.ragged.stack(states, axis=0)
+        states = tf.concat(states, axis=0)
         out = tf.TensorArray(dtype=tf.float32, size=inputs.get_shape().as_list()[0])
         # res = tf.TensorArray(dtype=tf.float32, size=seq_len)
         for ep_step in range(inputs.get_shape().as_list()[0]):
@@ -118,7 +118,10 @@ class unet(tf.keras.layers.AbstractRNNCell):
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
                 mem, state = self.ntm_enc_dec(f_left, state)
+                state = tf.RaggedTensor.from_tensor(tf.expand_dims(state, axis=0))
                 f_left = tf.concat([mem, f_left], axis=1)
+            else:
+                state = tf.RaggedTensor.from_tensor(tf.expand_dims(state, axis=0))
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)

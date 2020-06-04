@@ -195,7 +195,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
         train_loss = []
         train_coord_dist = []
-    
+        # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
             pred = predict(inp.stack())
             loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
