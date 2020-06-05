@@ -35,6 +35,7 @@ class unet2d(tf.keras.Model):
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
         states = []
+        out_list = []
         if self.ntm_config is not None:
             # states = tf.queue.FIFOQueue(capacity=len(self.ntm_config), dtypes=[tf.float32,tf.float32,tf.float32,tf.float32], names=['controller_state', 'read_list', 'w_list', 'M'])
             _unet = self.unet_rec
@@ -45,17 +46,16 @@ class unet2d(tf.keras.Model):
                 else:
                     states.append(tf.ragged.constant([[0.]]))
                 _unet = _unet.unet_rec
-        else:
-            state = None
+        #TODO add when we dont do ntm
         states = tf.concat(states, axis=0)
-        out = tf.TensorArray(dtype=tf.float32, size=inputs.get_shape().as_list()[0])
         # res = tf.TensorArray(dtype=tf.float32, size=seq_len)
         for ep_step in range(inputs.get_shape().as_list()[0]):
             
             unet_2d, states = self.unet_rec(inputs[ep_step], states)
             res = self.logits(unet_2d) # TODO payer et al do no activation ?
-            out = out.write(ep_step, res)
-        return out.stack()
+            out_list.append(res)
+        out = tf.concat(out_list, axis=0)
+        return out
 
 
 

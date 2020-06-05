@@ -5,6 +5,7 @@ import random
 
 import numpy as np
 import tensorflow as tf
+
 import matplotlib.pyplot as plt
 import cv2
 
@@ -14,6 +15,14 @@ import unet
 from ntm_configs import CONF_POS_LIST, CONF_MEM_LIST
 
 parser = argparse.ArgumentParser()
+
+physical_devices = tf.config.list_physical_devices('GPU')
+try:
+  tf.config.experimental.set_memory_growth(physical_devices[0], True)
+except:
+  # Invalid device or cannot modify virtual devices once initialized.
+  pass
+
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
@@ -189,15 +198,18 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     for step in range(start_steps, args.num_training_iterations+1):
         img, lab, _ = next(train) # img shape: 4,1,256,256, lab shape: 4,40,256,256
         ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
-        inp = tf.TensorArray(dtype=tf.float32, size=dataset.n_landmarks)
-        for ep_step in range(dataset.n_landmarks//lm_count):
-            inp = inp.write(ep_step, tf.concat([img, ep_lab], axis=1))
+        inp = tf.expand_dims(tf.concat([img, ep_lab], axis=1), axis=0)
+        for ep_step in range(dataset.n_landmarks//lm_count-1): # 
+            inp = tf.concat([inp, tf.expand_dims(tf.concat([img, ep_lab], axis=1), axis=0)], axis=0) 
             ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
+
+
+
         train_loss = []
         train_coord_dist = []
         # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
-            pred = predict(inp.stack())
+            pred = predict(inp)
             loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
         
             grad = tape.gradient(loss, unet_model.trainable_weights)
@@ -396,7 +408,7 @@ def load_dir(path, run_number, step):
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":256,
+    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":64,
                                                "kernel_size":3,
                                                "pool_size":[4,4]},
                               "ntm_param":{"controller_units":256,
@@ -406,12 +418,12 @@ if __name__ == "__main__":
                                            "read_head_num":3,
                                            "write_head_num":3}}
                         }
-    standard_ed_conf = {"0":{"enc_dec_param":{"num_filters":256,
+    standard_ed_conf = {"0":{"enc_dec_param":{"num_filters":64,
                                                "kernel_size":3,
                                                "pool_size":[4,4]},
                               "ntm_param":None}
                         }
-    conf_pos02={"0":{"enc_dec_param":{"num_filters":256,
+    conf_pos02={"0":{"enc_dec_param":{"num_filters":64,
                                                "kernel_size":3,
                                                "pool_size":[4,4]},
                               "ntm_param":{"controller_units":256,
@@ -420,7 +432,7 @@ if __name__ == "__main__":
                                            "output_dim":256,
                                            "read_head_num":3,
                                            "write_head_num":3}},
-            "2":{"enc_dec_param":{"num_filters":256,
+            "2":{"enc_dec_param":{"num_filters":64,
                                                "kernel_size":3,
                                                "pool_size":[2,2]},
                               "ntm_param":{"controller_units":256,
