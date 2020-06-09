@@ -26,18 +26,8 @@ except:
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
-
-# Model parameters
-parser.add_argument('--hidden_size', type=int, default=64, help='Size of LSTM hidden layer.')
-parser.add_argument('--hidden_layers', type=int, default=2, help='Number of LSTM hidden layers')
-parser.add_argument('--memory_size', type=int, default=16, help='The number of memory slots.')
-parser.add_argument('--word_size', type=int, default=16, help='The width of each memory slot.')
-parser.add_argument('--num_write_heads', type=int, default=1, help='Number of memory write heads.')
-parser.add_argument('--num_read_heads', type=int, default=4, help='Number of memory read heads.')
-parser.add_argument('--clip_value', type=int, default=20,
-                        help='Maximum absolute value of controller and dnc outputs.')
 
 # Optimizer parameters.
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer learning rate.')
@@ -213,6 +203,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
             pred = predict(inp)
+            # TODO Fix this
             ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
             loss = ssd_loss(ep_lab, pred) # loss for first lm_count landmarks
         
@@ -412,15 +403,15 @@ def load_dir(path, run_number, step):
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":64,
+    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":32,
                                                "kernel_size":3,
-                                               "pool_size":[4,4]},
+                                               "pool_size":[4,2]},
                               "ntm_param":{"controller_units":256,
                                            "memory_size":64,
                                            "memory_vector_dim":256,
-                                           "output_dim":256,
-                                           "read_head_num":3,
-                                           "write_head_num":3}}
+                                           "output_dim":64,
+                                           "read_head_num":1,
+                                           "write_head_num":1}}
                         }
     standard_ed_conf = {"0":{"enc_dec_param":{"num_filters":64,
                                                "kernel_size":3,
@@ -495,7 +486,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=32, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2]], lm_count=1, im_size=[64, 64], train_pct=5, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 
 

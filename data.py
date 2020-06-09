@@ -198,6 +198,7 @@ class Data_Loader():
             h = tf.clip_by_value(h,0,3233)
             label = tf.concat([w,h],axis=1)
             return img, label, file_name
-
+        
         self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        
         #self.im_size = decode_image(str(PATH+self.name+'/images/NG-SP196-909-0001.jpg')).shape
