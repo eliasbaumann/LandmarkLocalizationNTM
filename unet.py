@@ -34,28 +34,18 @@ class unet2d(tf.keras.Model):
 
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
-        states = []
-        out_list = []
-        if self.ntm_config is not None:
-            # states = tf.queue.FIFOQueue(capacity=len(self.ntm_config), dtypes=[tf.float32,tf.float32,tf.float32,tf.float32], names=['controller_state', 'read_list', 'w_list', 'M'])
-            _unet = self.unet_rec
-            while _unet is not None:
-                if _unet.ntm_enc_dec is not None:
-                    state = _unet.get_initial_state()
-                    states.append(tf.RaggedTensor.from_tensor(tf.expand_dims(state, axis=0)))
-                else:
-                    states.append(tf.ragged.constant([[0.]]))
-                _unet = _unet.unet_rec
-        #TODO add when we dont do ntm
-        states = tf.concat(states, axis=0)
-        # res = tf.TensorArray(dtype=tf.float32, size=seq_len)
-        for ep_step in range(inputs.get_shape().as_list()[0]):
-            
-            unet_2d, states = self.unet_rec(inputs[ep_step], states)
+        states = None
+        output_list = tf.TensorArray(dtype=tf.float32, size=40)
+        _unet = self.unet_rec
+        while _unet is not None:
+            if _unet.ntm_enc_dec is not None:
+                states = _unet.get_initial_state()
+            _unet = _unet.unet_rec
+        for i in range(40):
+            unet_2d, states = self.unet_rec(inputs[i], states)
             res = self.logits(unet_2d) # TODO payer et al do no activation ?
-            out_list.append(res)
-        out = tf.concat(out_list, axis=0)
-        return out
+            output_list = output_list.write(i, res)
+        return output_list.stack()
 
 
 
@@ -81,7 +71,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
             if self.layer in list(map(int, self.ntm_config.keys())):
                 assert self.batch_size is not None, 'Please set batch_size in unet2d init'
                 assert self.ntm_config[str(self.layer)]["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
-                self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, name="ntm_enc_dec_"+str(self.layer))
+                self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, layer=self.layer, name="ntm_enc_dec_"+str(self.layer))
         
         if self.layer >= len(self.downsample_factors)-1:
             self.drop = tf.keras.layers.Dropout(.2,seed=42, name='dropout_%i'%self.layer)
@@ -112,33 +102,28 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.out_conv = None
     
     @tf.function
-    def call(self, inputs, states):
+    def call(self, inputs, prev_state):
         f_left = self.inp_conv(inputs)
-        state = states[self.layer]
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
-                mem, state = self.ntm_enc_dec(f_left, state)
-                state = tf.RaggedTensor.from_tensor(tf.expand_dims(state, axis=0))
+                mem, prev_state = self.ntm_enc_dec(f_left, prev_state)
                 f_left = tf.concat([mem, f_left], axis=1)
-            else:
-                state = tf.RaggedTensor.from_tensor(tf.expand_dims(state, axis=0))
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)
-            return f_left, state
+            return f_left, prev_state
         # to add dropout to second to last layer as well: 
         elif self.layer == len(self.downsample_factors)-1:
             f_left = self.drop(f_left)
         g_in = self.ds(f_left)
-        g_out, state_rec = self.unet_rec(g_in, states)
-
-        ret_state = tf.concat([state,state_rec], axis=0)
+        g_out, prev_state = self.unet_rec(g_in, prev_state)
 
         g_out_upsampled = self.us(g_out)
         f_left_cropped = self.crop(f_left, tf.shape(g_out_upsampled))
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
         f_out = self.out_conv(f_right)
-        return f_out, ret_state
+        
+        return f_out, prev_state
 
     def get_config(self):
         config = super(unet, self).get_config()

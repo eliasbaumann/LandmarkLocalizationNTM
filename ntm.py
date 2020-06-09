@@ -14,7 +14,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
     memory_mode: 'matrix' -> store matrices, 'embedding' -> create embedding and store
     '''
-    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size,
+    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size, layer,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
                  init_mode='constant', memory_mode='encoder', name='ntm_cell'):
         super(NTMCell, self).__init__(name=name)
@@ -30,7 +30,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.clip_value = clip_value
         self.num_heads = self.read_head_num+self.write_head_num
         self.batch_size = batch_size
-
+        self.layer = layer
 
         self._ds = tf.keras.layers.MaxPooling2D(pool_size=(8,8), name='ntm_pool2d')
 
@@ -53,7 +53,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
         self.init_mode = init_mode
 
-        self.step = 0
         self.output_dim = output_dim
         self.shift_range = shift_range
 
@@ -67,48 +66,33 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
         # for initial state: Create variables:
         # from https://github.com/snowkylin/ntm/blob/master/ntm/ntm_cell_v2.py#L39 
-        self.init_memory_state = self.add_weight(name='init_memory_state',
+        self.init_memory_state = self.add_weight(name='init_memory_state_%d' % self.layer,
                                                  shape=[self.controller_units],
                                                  initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-        self.init_carry_state = self.add_weight(name='init_carry_state',
+        self.init_carry_state = self.add_weight(name='init_carry_state_%d' % self.layer,
                                                 shape=[self.controller_units],
                                                 initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-        self.init_r = [self.add_weight(name='init_r_%d' % i,
+        self.init_r = [self.add_weight(name='init_r_%d_%d' % (self.layer, i),
                                        shape=[self.memory_vector_dim],
                                        initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
                        for i in range(self.read_head_num)]
-        self.init_w = [self.add_weight(name='init_w_%d' % i,
+        self.init_w = [self.add_weight(name='init_w_%d_%d' % (self.layer, i),
                                        shape=[self.memory_size],
                                        initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
                        for i in range(self.read_head_num + self.write_head_num)]
-        self.init_M = self.add_weight(name='init_M',
+        self.init_M = self.add_weight(name='init_M_%d' % self.layer,
                                       shape=[self.memory_size, self.memory_vector_dim],
                                       initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
 
 
-        self.ctrl_ind = 2*self.batch_size*self.controller_units
-        self.readl_ind = self.read_head_num*self.batch_size*self.memory_vector_dim
-        self.writl_ind = (self.read_head_num + self.write_head_num) * self.batch_size * self.memory_size
-        self.m_ind = self.batch_size * self.memory_size * self.memory_vector_dim
     
-    @tf.function
+    # @tf.function
     def call(self, x, prev_state):
-        
-        # TODO make this work with raggedTensor not being reshaped by this call:
-        controller_state = tf.reshape(prev_state[:self.ctrl_ind], [2,self.batch_size,self.controller_units])
-        prev_read_list = tf.reshape(prev_state[self.ctrl_ind:self.ctrl_ind+self.readl_ind], [self.batch_size, self.read_head_num * self.memory_vector_dim])
-        prev_w_list = tf.reshape(prev_state[self.ctrl_ind+self.readl_ind:self.ctrl_ind+self.readl_ind+self.writl_ind], [self.read_head_num+self.write_head_num, self.batch_size, self.memory_size])
-        prev_M = tf.reshape(prev_state[-self.m_ind:], [self.batch_size, self.memory_size, self.memory_vector_dim]) # TODO check if this is correct, also reshape correct?
-        #prev_state = NTMControllerState(prev_state[0],prev_state[1],prev_state[2],prev_state[3])
-        # prev_read_list = prev_state["read_list"]
+        prev_read_list = prev_state["read_vector_list"]
         #prev_read_list.set_shape([self.read_head_num, self.batch_size, self.memory_vector_dim])
-
-        # controller_input = tf.concat([x]+prev_read_list, axis=1, name='concat_ctrl_inp')
-
-        controller_input = tf.concat([x,prev_read_list], axis=1, name='concat_ctrl_inp')
-        #controller_state = prev_state["controller_state"]
+        controller_input = tf.concat([x]+prev_read_list, axis=1, name='concat_ctrl_inp%d' % self.layer)
+        controller_state = prev_state["controller_state"]
         # controller_state.set_shape([2, self.batch_size, self.controller_units])
-
         controller_output, controller_state = self._controller(controller_input, controller_state)
         parameters = self.o2p(controller_output)
         parameters = tf.clip_by_value(parameters, -self.clip_value, self.clip_value)
@@ -116,9 +100,9 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         head_parameter_list = tf.split(parameters[:, :self.num_params_per_head * self.num_heads], self.num_heads, axis=1)
         erase_add_list = tf.split(parameters[:, self.num_params_per_head * self.num_heads:], 2 * self.write_head_num, axis=1)
 
-        #prev_w_list = prev_state["w_list"]
+        prev_w_list = prev_state["w_list"]
         # prev_w_list.set_shape([self.read_head_num + self.write_head_num, self.batch_size, self.memory_size])
-        #prev_M = prev_state["M"]
+        prev_M = prev_state["M"]
         # prev_M.set_shape([self.batch_size, self.memory_size, self.memory_vector_dim])
         w_list = []
         
@@ -145,10 +129,15 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             add_vec = tf.expand_dims(tf.tanh(erase_add_list[i*2+1]), axis=1)
             M = M * (tf.ones(M.get_shape()) - tf.matmul(w, erase_vec)) + tf.matmul(w, add_vec)
 
-        ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1, name='concat_ntm_out'))
+        ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1, name='concat_ntm_out_%d' % self.layer))
         ntm_output = tf.clip_by_value(ntm_output, -self.clip_value, self.clip_value)
-        self.step += 1
-        return ntm_output, tf.concat([tf.reshape(controller_state, [-1]), tf.reshape(read_vector_list, [-1]), tf.reshape(w_list, [-1]), tf.reshape(M, [-1])], axis=0)
+        state = {
+            'controller_state': controller_state,
+            'read_vector_list': read_vector_list,
+            'w_list': w_list,
+            'M': M
+        }
+        return ntm_output, state
     
     @tf.function
     def _addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
@@ -164,11 +153,11 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         # TODO i literally do not know whats happening here, we create the shift matrix i guess
         s = tf.concat([s[:, :self.shift_range + 1],
                        tf.zeros([s.get_shape()[0], self.memory_size - (self.shift_range * 2 + 1)]),
-                       s[:, -self.shift_range:]], axis=1, name='concat_adressing_1')
+                       s[:, -self.shift_range:]], axis=1, name='concat_adressing_%d_1' % self.layer)
         t = tf.concat([tf.reverse(s, axis=[1]), tf.reverse(s, axis=[1])], axis=1)
         s_matrix = tf.stack(
             [t[:, self.memory_size - i - 1:self.memory_size * 2 - i - 1] for i in range(self.memory_size)],
-            axis=1, name='concat_adressing_2'
+            axis=1, name='concat_adressing_%d_2' % self.layer
         )
 
         w_ = tf.reduce_sum(tf.expand_dims(w_g, axis=1)*s_matrix, axis=2)
@@ -194,22 +183,24 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     
     @tf.function
     def get_initial_state(self):
-        controller_state=[self._expand(tf.tanh(self.init_memory_state), dim=0, N=self.batch_size),
-                                 self._expand(tf.tanh(self.init_carry_state), dim=0, N=self.batch_size)]
-        read_list=[self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=self.batch_size)
-                                for i in range(self.read_head_num)]
-        w_list=[self._expand(tf.nn.softmax(self.init_w[i]), dim=0, N=self.batch_size)
-                    for i in range(self.read_head_num + self.write_head_num)]
-        M=self._expand(tf.tanh(self.init_M), dim=0, N=self.batch_size)
-        return tf.concat([tf.reshape(controller_state, [-1]), tf.reshape(read_list, [-1]), tf.reshape(w_list, [-1]), tf.reshape(M, [-1])], axis=0)
+        initial_state = {
+            'controller_state': [self._expand(tf.tanh(self.init_memory_state), dim=0, N=self.batch_size),
+                                 self._expand(tf.tanh(self.init_carry_state), dim=0, N=self.batch_size)],
+            'read_vector_list': [self._expand(tf.nn.tanh(self.init_r[i]), dim=0, N=self.batch_size)
+                                 for i in range(self.read_head_num)],
+            'w_list': [self._expand(tf.nn.softmax(self.init_w[i]), dim=0, N=self.batch_size)
+                       for i in range(self.read_head_num + self.write_head_num)],
+            'M': self._expand(tf.tanh(self.init_M), dim=0, N=self.batch_size)
+        }
+        return initial_state
 
     @tf.function
     def _expand(self, x, dim, N):
-        return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand')
+        return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand_%d' % self.layer)
 
     @tf.function
     def _learned_init(self, units):
-        return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None, name='learned_init')(tf.ones([1, 1])))
+        return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None, name='learned_init_%d' % self.layer)(tf.ones([1, 1])))
 
     @property
     def output_size(self):

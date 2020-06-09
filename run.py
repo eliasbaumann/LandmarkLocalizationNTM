@@ -43,7 +43,7 @@ parser.add_argument('--clip_value', type=int, default=20,
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer learning rate.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=10000,
+parser.add_argument('--num_training_iterations', type=int, default=1,
                         help='Number of iterations to train for.')
 parser.add_argument('--num_epochs', type=int, default=200,
                         help='Number of iterations to train for.')
@@ -198,25 +198,29 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     for step in range(start_steps, args.num_training_iterations+1):
         img, lab, _ = next(train) # img shape: 4,1,256,256, lab shape: 4,40,256,256
         ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
-        inp = tf.expand_dims(tf.concat([img, ep_lab], axis=1), axis=0)
-        for ep_step in range(dataset.n_landmarks//lm_count-1): # 
-            inp = tf.concat([inp, tf.expand_dims(tf.concat([img, ep_lab], axis=1), axis=0)], axis=0) 
-            ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
+        
+        img = tf.repeat(tf.transpose(img, [1,0,2,3]), dataset.n_landmarks, axis=0)
+        ep_lab = tf.transpose(tf.concat([ep_lab, lab[:,0:dataset.n_landmarks-lm_count,:,:]], axis=1), [1,0,2,3])
+        
+        img = tf.reshape(img, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
+        ep_lab = tf.reshape(ep_lab, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
 
-
+        inp = tf.concat([img,ep_lab], axis=2)
+        
 
         train_loss = []
         train_coord_dist = []
         # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
             pred = predict(inp)
-            loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
+            ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
+            loss = ssd_loss(ep_lab, pred) # loss for first lm_count landmarks
         
             grad = tape.gradient(loss, unet_model.trainable_weights)
             optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
             train_loss.append(loss)
             train_coord_dist.append(coord_dist(lab, pred))
-        
+            
         train_loss_lm.append([train_loss])
         train_coord_dist_lm.append([train_coord_dist])
         
@@ -439,8 +443,8 @@ if __name__ == "__main__":
                                            "memory_size":64,
                                            "memory_vector_dim":256,
                                            "output_dim":256,
-                                           "read_head_num":3,
-                                           "write_head_num":3}}
+                                           "read_head_num":4,
+                                           "write_head_num":4}}
 }
 
     # List of experiments:
@@ -491,8 +495,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, ntm_config=conf_pos02)
-    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=64, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[256, 256], train_pct=5, val_pct=5, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 
 
