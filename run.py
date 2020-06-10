@@ -26,7 +26,7 @@ except:
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
@@ -89,18 +89,20 @@ def per_kp_stats(y_true, y_pred, margin): # input_shape: (batch_size, n_landmark
     within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0) # check distance of pred to target and if its within margin
     return within_margin, closest_to_nearest
 
-@tf.function
-def per_kp_stats_iter(y_true, y_pred, y_true_full, margin):
+# TODO FIX THIS SHIT!
+@tf.function # (lm, batch, C, H, W)
+def per_kp_stats_iter(y_true, y_pred, margin):
     y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred) # (4, 1, 2)
     y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true) # (4, 1, 2)
-    y_true_full = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true_full) # (4, 40, 2)
-    exp_y_pred = tf.expand_dims(y_pred, 1)
-    exp_y_true_full = tf.expand_dims(y_true_full, 2)
-    exp_closest = tf.argmin(tf.squeeze(tf.reduce_mean(tf.square(tf.subtract(exp_y_pred, exp_y_true_full)), axis=-1)), axis=-1)
-    cur_index = tf.reduce_mean(tf.where(tf.reduce_all(tf.equal(y_true, y_true_full), axis=-1))[:,-1])
-    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(cur_index, exp_closest), tf.float32))
-    within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32))
-    return within_margin, closest_to_nearest
+    
+    # y_true_full = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true_full) # (4, 40, 2)
+    # exp_y_pred = tf.expand_dims(y_pred, 1)
+    # exp_y_true_full = tf.expand_dims(y_true_full, 2)
+    # exp_closest = tf.argmin(tf.squeeze(tf.reduce_mean(tf.square(tf.subtract(exp_y_pred, exp_y_true_full)), axis=-1)), axis=-1)
+    # cur_index = tf.reduce_mean(tf.where(tf.reduce_all(tf.equal(y_true, y_true_full), axis=-1))[:,-1])
+    # closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(cur_index, exp_closest), tf.float32))
+    # within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32))
+    return None # within_margin, closest_to_nearest
 
 @tf.function
 def unstack_img_lab(img, kp_list):
@@ -173,6 +175,20 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     def predict(img):
         return unet_model(img)
 
+    @tf.function
+    def convert_input(img, lab, lm, imsize, lm_count):
+        ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
+        
+        img = tf.repeat(tf.transpose(img, [1,0,2,3]), lm, axis=0)
+        ep_lab = tf.transpose(tf.concat([ep_lab, lab[:,0:lm-lm_count,:,:]], axis=1), [1,0,2,3])
+        
+        img = tf.reshape(img, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
+        ep_lab = tf.reshape(ep_lab, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
+
+        inp = tf.concat([img,ep_lab], axis=2)
+        lab = tf.expand_dims(tf.transpose(lab, [1,0,2,3]), axis=2)
+        return inp, lab
+
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     train = iter(dataset.data)
     val = iter(dataset.val_data)
@@ -187,16 +203,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
         img, lab, _ = next(train) # img shape: 4,1,256,256, lab shape: 4,40,256,256
-        ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
-        
-        img = tf.repeat(tf.transpose(img, [1,0,2,3]), dataset.n_landmarks, axis=0)
-        ep_lab = tf.transpose(tf.concat([ep_lab, lab[:,0:dataset.n_landmarks-lm_count,:,:]], axis=1), [1,0,2,3])
-        
-        img = tf.reshape(img, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
-        ep_lab = tf.reshape(ep_lab, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
-
-        inp = tf.concat([img,ep_lab], axis=2)
-        
+        inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count)
 
         train_loss = []
         train_coord_dist = []
@@ -204,13 +211,15 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         with tf.GradientTape() as tape:
             pred = predict(inp)
             # TODO Fix this
-            ep_lab = lab[:,ep_step*lm_count:(ep_step+1)*lm_count,:,:]
-            loss = ssd_loss(ep_lab, pred) # loss for first lm_count landmarks
+
+            # loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
+            loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32)
         
             grad = tape.gradient(loss, unet_model.trainable_weights)
             optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
             train_loss.append(loss)
-            train_coord_dist.append(coord_dist(lab, pred))
+            c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
+            train_coord_dist.append(c_dist)
             
         train_loss_lm.append([train_loss])
         train_coord_dist_lm.append([train_coord_dist])
@@ -222,16 +231,15 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 mrg = []
                 cgt = []
                 img_v, lab_v, _ = next(val)
-                ep_lab_v = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label
-                for ep_step_v in range(dataset.n_landmarks//lm_count-1):
-                    inp_v = tf.concat([img_v, ep_lab_v], axis=1)
-                    ep_lab_v = lab_v[:,ep_step_v*lm_count:(ep_step_v+1)*lm_count,:,:] # t label
-                    pred_v = predict(inp_v)
-                    within_margin, closest_to_gt = per_kp_stats_iter(ep_lab_v, pred_v, lab_v, kp_margin) # TODO: returns single values now, fix appropriately
-                    mrg.append(within_margin)
-                    cgt.append(closest_to_gt)
-                    val_loss.append(ssd_loss(ep_lab_v, pred_v))
-                    val_coord_dist.append(coord_dist(ep_lab_v, pred_v))
+                inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, im_size, lm_count)
+                pred_v = predict(inp_v) # (lm, batch, C, H, W)
+                
+                within_margin, closest_to_gt = per_kp_stats_iter(lab_v, pred_v, kp_margin)
+
+                mrg.append(within_margin)
+                cgt.append(closest_to_gt)
+                val_loss.append(ssd_loss(ep_lab_v, pred_v))
+                val_coord_dist.append(coord_dist(ep_lab_v, pred_v))
                 
                 val_loss_lm.append([val_loss])
                 val_coord_dist_lm.append([val_coord_dist])
