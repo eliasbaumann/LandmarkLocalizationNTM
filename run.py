@@ -45,7 +45,7 @@ parser.add_argument('--checkpoint_interval', type=int, default=1000,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-tf.config.experimental_run_functions_eagerly(True)
+# tf.config.experimental_run_functions_eagerly(True)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy()
@@ -78,6 +78,16 @@ def get_max_indices(logits):
     coords = tf.cond(tf.greater(tf.rank(coords),tf.constant(1)),true_fn=lambda:tf.gather(coords,0),false_fn=lambda:coords)
     return tf.cast(coords, tf.float32)
 
+# TODO use this for other functions than per_kp_stats_iter
+@tf.function
+def get_max_indices_argmax(logits):
+    flat_logits = tf.reshape(logits, [tf.shape(logits)[0], tf.shape(logits)[1], tf.shape(logits)[2], -1])
+    max_val = tf.cast(tf.argmax(flat_logits, axis=3), tf.int32)
+    x = max_val // tf.shape(logits)[-1]
+    y = max_val % tf.shape(logits)[-1]
+    res =  tf.concat((x,y), axis=2)
+    return res
+
 @tf.function
 def per_kp_stats(y_true, y_pred, margin): # input_shape: (batch_size, n_landmarks, im_size, im_size)
     y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred)
@@ -89,20 +99,17 @@ def per_kp_stats(y_true, y_pred, margin): # input_shape: (batch_size, n_landmark
     within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32), axis=0) # check distance of pred to target and if its within margin
     return within_margin, closest_to_nearest
 
-# TODO FIX THIS SHIT!
 @tf.function # (lm, batch, C, H, W)
 def per_kp_stats_iter(y_true, y_pred, margin):
-    y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred) # (4, 1, 2)
-    y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true) # (4, 1, 2)
-    
-    # y_true_full = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true_full) # (4, 40, 2)
-    # exp_y_pred = tf.expand_dims(y_pred, 1)
-    # exp_y_true_full = tf.expand_dims(y_true_full, 2)
-    # exp_closest = tf.argmin(tf.squeeze(tf.reduce_mean(tf.square(tf.subtract(exp_y_pred, exp_y_true_full)), axis=-1)), axis=-1)
-    # cur_index = tf.reduce_mean(tf.where(tf.reduce_all(tf.equal(y_true, y_true_full), axis=-1))[:,-1])
-    # closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(cur_index, exp_closest), tf.float32))
-    # within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_true, y_pred))), axis=2), tf.float32))
-    return None # within_margin, closest_to_nearest
+    y_pred_n = get_max_indices_argmax(y_pred)
+    y_true_n = get_max_indices_argmax(y_true)
+    exp_y_pred = tf.expand_dims(y_pred_n, 0)
+    exp_y_true = tf.expand_dims(y_true_n, 1)
+    closest = tf.square(tf.subtract(exp_y_pred, exp_y_true)) # using TF broadcast to create distance table
+    closest_red = tf.argmin(tf.reduce_mean(closest, axis=-1), axis=1) # find min distance
+    closest_to_nearest = tf.reduce_mean(tf.cast(tf.equal(tf.transpose(tf.cast(closest_red, tf.int32)), tf.range(tf.shape(closest_red)[0], dtype=tf.int32)), dtype=tf.float32), axis=0) 
+    within_margin = tf.reduce_mean(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_pred_n, y_true_n))), axis=-1), tf.float32), axis=-1) # 
+    return within_margin, closest_to_nearest 
 
 @tf.function
 def unstack_img_lab(img, kp_list):
@@ -156,7 +163,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     '''
     
     
-    kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
+    kp_margin = tf.constant(kp_metric_margin, dtype=tf.int32)
     dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct)
     dataset(im_size=im_size)
 
@@ -204,9 +211,6 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     for step in range(start_steps, args.num_training_iterations+1):
         img, lab, _ = next(train) # img shape: 4,1,256,256, lab shape: 4,40,256,256
         inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count)
-
-        train_loss = []
-        train_coord_dist = []
         # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
             pred = predict(inp)
@@ -214,19 +218,15 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
 
             # loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
             loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32)
-        
             grad = tape.gradient(loss, unet_model.trainable_weights)
             optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
-            train_loss.append(loss)
             c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
-            train_coord_dist.append(c_dist)
-            
-        train_loss_lm.append([train_loss])
-        train_coord_dist_lm.append([train_coord_dist])
+    
+        train_loss_lm.append([loss])
+        train_coord_dist_lm.append([c_dist])
         
         if step % args.report_interval == 0:
             for _ in range(args.validation_steps):
-                val_loss = []
                 val_coord_dist = []
                 mrg = []
                 cgt = []
@@ -238,11 +238,11 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
 
                 mrg.append(within_margin)
                 cgt.append(closest_to_gt)
-                val_loss.append(ssd_loss(ep_lab_v, pred_v))
-                val_coord_dist.append(coord_dist(ep_lab_v, pred_v))
+                val_loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab_v, pred_v), dtype=tf.float32)
+                val_c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab_v, pred_v), dtype=tf.float32)
                 
                 val_loss_lm.append([val_loss])
-                val_coord_dist_lm.append([val_coord_dist])
+                val_coord_dist_lm.append([val_c_dist])
                 mrg_lm.append(mrg)
                 cgt_lm.append(cgt)
                 
