@@ -34,13 +34,17 @@ class unet2d(tf.keras.Model):
 
     @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
-        states = None
+        # TODO left at: this nested list stuff maybe works? How can we un-nest? Add constants for filler?
+        states = []
         output_list = tf.TensorArray(dtype=tf.float32, size=40)
         _unet = self.unet_rec
         while _unet is not None:
             if _unet.ntm_enc_dec is not None:
-                states = _unet.get_initial_state()
+                states = [*states, _unet.get_initial_state()]
+            else:
+                states = [*states, tf.constant(0.)]
             _unet = _unet.unet_rec
+        # states = tf.nest.flatten(states)
         for i in range(40):
             unet_2d, states = self.unet_rec(inputs[i], states)
             res = self.logits(unet_2d) # TODO payer et al do no activation ?
@@ -104,26 +108,27 @@ class unet(tf.keras.layers.AbstractRNNCell):
     @tf.function
     def call(self, inputs, prev_state):
         f_left = self.inp_conv(inputs)
+        state = tf.constant(0.)
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
-                mem, prev_state = self.ntm_enc_dec(f_left, prev_state)
+                mem, state = self.ntm_enc_dec(f_left, prev_state[self.layer])
                 f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)
-            return f_left, prev_state
+            return f_left, [state]
         # to add dropout to second to last layer as well: 
         elif self.layer == len(self.downsample_factors)-1:
             f_left = self.drop(f_left)
         g_in = self.ds(f_left)
-        g_out, prev_state = self.unet_rec(g_in, prev_state)
+        g_out, state_rec = self.unet_rec(g_in, prev_state)
 
         g_out_upsampled = self.us(g_out)
         f_left_cropped = self.crop(f_left, tf.shape(g_out_upsampled))
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
         f_out = self.out_conv(f_right)
         
-        return f_out, prev_state
+        return f_out, [state, *state_rec]
 
     def get_config(self):
         config = super(unet, self).get_config()
