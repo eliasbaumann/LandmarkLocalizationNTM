@@ -46,7 +46,6 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
         self.flat = tf.keras.layers.Flatten(data_format='channels_first', name='enc_dec_flat_%d' % self.layer)
         
 
-    @tf.function
     def call(self, x, state):
         for i in range(len(self.pool_size)):
             x = self.conv[i](x)

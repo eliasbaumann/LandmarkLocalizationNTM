@@ -105,7 +105,6 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.crop = None
             self.out_conv = None
     
-    @tf.function
     def call(self, inputs, prev_state):
         f_left = self.inp_conv(inputs)
         state = tf.constant(0.)
