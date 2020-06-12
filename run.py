@@ -27,7 +27,7 @@ except:
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
 parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
-parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
+parser.add_argument('--num_test_samples', type=int, default=2, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer learning rate.')
@@ -35,7 +35,7 @@ parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer
 # Training options.
 parser.add_argument('--num_training_iterations', type=int, default=1,
                         help='Number of iterations to train for.')
-parser.add_argument('--validation_steps', type=int, default=5,
+parser.add_argument('--validation_steps', type=int, default=2,
                         help='Number of validation steps after every epoch.')
 parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
@@ -43,7 +43,7 @@ parser.add_argument('--checkpoint_interval', type=int, default=1000,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-# tf.config.experimental_run_functions_eagerly(True)
+tf.config.experimental_run_functions_eagerly(True)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy()
@@ -134,12 +134,48 @@ def store_results(img, label, model, kp_list, fn, path):
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
     plt.savefig(path+'\\samples\\'+filename+'_gt.png')
 
-def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_size):
-    filename = fn.numpy().decode('UTF-8')
-    inp, lab = convert_input(img, lab, n_landmarks, im_size, lm_count)
+def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_size, kp_margin):
+    filenames = [i.decode('UTF-8') for i in fn.numpy()]
+    inp, lab = convert_input(img, label, n_landmarks, im_size, lm_count)
     pred = model(inp)
-    # TODO write this
 
+    loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32)
+
+    lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[1]])
+    pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[1]])
+
+    c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
+    within_margin, closest_to_gt = per_kp_stats_iter(lab, pred, kp_margin)
+
+    pred_keypoints = tf.transpose(get_max_indices_argmax(pred), [1,0,2])
+    lab_keypoints = tf.transpose(get_max_indices_argmax(lab), [1,0,2])
+    
+    img = img.numpy().squeeze()
+    pred_keypoints = pred_keypoints.numpy()
+    lab_keypoints = lab_keypoints.numpy()
+    if not os.path.exists(path+'\\samples\\'):
+        os.makedirs(path+'\\samples\\')
+    for i in range(img.shape[0]):
+        vis_points(img[i], pred_keypoints[i], 3, None)
+        
+        plt.savefig(path+'\\samples\\'+filenames[i]+'_pred.png')
+        vis_points(img[i], lab_keypoints[i], 3, None)
+        plt.savefig(path+'\\samples\\'+filenames[i]+'_gt.png')
+    return [loss], [c_dist], within_margin, closest_to_gt
+    
+@tf.function
+def convert_input(img, lab, lm, im_size, lm_count):
+    ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
+    
+    img = tf.repeat(tf.transpose(img, [1,0,2,3]), lm, axis=0)
+    ep_lab = tf.transpose(tf.concat([ep_lab, lab[:,0:lm-lm_count,:,:]], axis=1), [1,0,2,3])
+    
+    img = tf.reshape(img, [-1, tf.shape(img)[1], lm_count, im_size[0], im_size[1]])
+    ep_lab = tf.reshape(ep_lab, [-1, tf.shape(img)[1], lm_count, im_size[0], im_size[1]])
+
+    inp = tf.concat([img,ep_lab], axis=2)
+    lab = tf.reshape(tf.expand_dims(tf.transpose(lab, [1,0,2,3]), axis=2), [-1, tf.shape(img)[1], lm_count, im_size[0], im_size[1]])
+    return inp, lab
 
 def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     '''
@@ -163,20 +199,6 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
 
-    @tf.function
-    def convert_input(img, lab, lm, imsize, lm_count):
-        ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
-        
-        img = tf.repeat(tf.transpose(img, [1,0,2,3]), lm, axis=0)
-        ep_lab = tf.transpose(tf.concat([ep_lab, lab[:,0:lm-lm_count,:,:]], axis=1), [1,0,2,3])
-        
-        img = tf.reshape(img, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
-        ep_lab = tf.reshape(ep_lab, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
-
-        inp = tf.concat([img,ep_lab], axis=2)
-        lab = tf.reshape(tf.expand_dims(tf.transpose(lab, [1,0,2,3]), axis=2), [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
-        return inp, lab
-
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     train = iter(dataset.data)
     val = iter(dataset.val_data)
@@ -190,8 +212,8 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     tf.print("Starting train loop...")
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
-        img, lab, _ = next(train) # img shape: 4,1,256,256, lab shape: 4,40,256,256
-        inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count)
+        img, lab, _ = next(train) # img shape: 4,1,64,64, lab shape: 4,40,64,64
+        inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count) # img shape: 20,4,4,64,64, lab shape: 20,4,2,64,64
         # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
             pred = unet_model(inp)
@@ -276,9 +298,26 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             unet_model.save_weights(cp_path.format(step=step))
             print("saved cp-{:04d}".format(step))
     test = iter(dataset.test_data)
+    test_loss = []
+    test_c_dist = []
+    test_mrg = []
+    test_cgt = []
     for _ in range(args.num_test_samples):
-        img_t, lab_t, fn = next(test)
-        store_results_iter(img_t, lab_t, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size)
+        img_t, lab_t, fn = next(test) # img: 1,1,64,64 , lab: 1,40,64,64
+        # img_t = tf.expand_dims(img_t, axis=0)
+        # lab_t = tf.expand_dims(lab_t, axis=0)
+        loss_t, c_dist_t, mrg_t, cgt_t = store_results_iter(img_t, lab_t, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size, kp_margin)
+        test_loss.append(loss_t)
+        test_c_dist.append(c_dist_t)
+        test_mrg.append(mrg_t)
+        test_cgt.append(cgt_t)
+    test_res = [np.array(tf.squeeze(tf.reduce_mean(i, axis=0))) for i in [test_loss, test_c_dist, test_mrg, test_cgt]]
+    with open(os.path.join(log_path, 'test_res.txt'), 'ab') as testtxt:
+        for i in test_res:
+            np.savetxt(testtxt, [i], fmt='%3.3f', delimiter=",")
+    testtxt.close()
+    
+        
 
 def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=None, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     assert im_size is not None, "Please provide an image size to which to rescale the input to"
