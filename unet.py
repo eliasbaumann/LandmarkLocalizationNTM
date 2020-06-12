@@ -34,7 +34,6 @@ class unet2d(tf.keras.Model):
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
     def call(self, inputs):
-        # TODO left at: this nested list stuff maybe works? How can we un-nest? Add constants for filler?
         states = []
         output_list = tf.TensorArray(dtype=tf.float32, size=self.seq_len)
         _unet = self.unet_rec
