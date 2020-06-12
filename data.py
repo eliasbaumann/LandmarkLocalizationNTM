@@ -68,6 +68,7 @@ class Data_Loader():
         
         self.data = self.data.batch(self.batch_size, drop_remainder = True)
         self.val_data = self.val_data.batch(self.batch_size, drop_remainder=True)
+        self.test_data = self.test_data.batch(self.batch_size, drop_remainder=True)
 
         
         if self.prefetch:
