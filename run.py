@@ -26,7 +26,7 @@ except:
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=10, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
@@ -35,11 +35,9 @@ parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer
 # Training options.
 parser.add_argument('--num_training_iterations', type=int, default=1,
                         help='Number of iterations to train for.')
-parser.add_argument('--num_epochs', type=int, default=200,
-                        help='Number of iterations to train for.')
 parser.add_argument('--validation_steps', type=int, default=5,
                         help='Number of validation steps after every epoch.')
-parser.add_argument('--report_interval', type=int, default=50,
+parser.add_argument('--report_interval', type=int, default=10,
                         help='Iterations between reports (samples, valid loss).')
 parser.add_argument('--checkpoint_interval', type=int, default=1000,
                         help='Checkpointing step interval.')
@@ -136,25 +134,12 @@ def store_results(img, label, model, kp_list, fn, path):
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
     plt.savefig(path+'\\samples\\'+filename+'_gt.png')
 
-def predict_custom(path, kp_list=None, run_number=None, start_steps=0, kp_metric_margin=3):
-    if start_steps % args.checkpoint_interval != 0:
-        start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
-    if kp_list == [0]:
-        kp_list = None
-    kp_margin = tf.constant(kp_metric_margin, dtype=tf.float32)
-    dataset = data.Data_Loader(args.dataset, args.batch_size)
-    dataset(keypoints=kp_list)
-    len_kp = (len(kp_list)-1) if kp_list is not None else 0
-    
-    log_path, cp_path = load_dir(path, run_number, start_steps)
-    unet_model = tf.keras.models.load_model(cp_path, compile=False)
-    latest = tf.train.latest_checkpoint(log_path+"\\cp\\")
-    print("checkpoint:",latest)
-    unet_model.load_weights(latest)
-    test = iter(dataset.test_data)
-    for _ in range(args.num_test_samples):
-        img, lab, fn = next(test)
-        store_results(img, lab, unet_model, kp_list, fn, log_path)
+def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_size):
+    filename = fn.numpy().decode('UTF-8')
+    inp, lab = convert_input(img, lab, n_landmarks, im_size, lm_count)
+    pred = model(inp)
+    # TODO write this
+
 
 def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     '''
@@ -167,7 +152,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct)
     dataset(im_size=im_size)
 
-    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, ntm_config=ntm_config, batch_size=args.batch_size)
+    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, seq_len=dataset.n_landmarks//lm_count, ntm_config=ntm_config, batch_size=args.batch_size)
     if start_steps > 0:
         if start_steps % args.checkpoint_interval != 0:
             start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
@@ -177,10 +162,6 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         log_path, cp_path = create_dir(path)
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
-
-    @tf.function
-    def predict(img):
-        return unet_model(img)
 
     @tf.function
     def convert_input(img, lab, lm, imsize, lm_count):
@@ -193,7 +174,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         ep_lab = tf.reshape(ep_lab, [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
 
         inp = tf.concat([img,ep_lab], axis=2)
-        lab = tf.expand_dims(tf.transpose(lab, [1,0,2,3]), axis=2)
+        lab = tf.reshape(tf.expand_dims(tf.transpose(lab, [1,0,2,3]), axis=2), [-1, args.batch_size, lm_count, im_size[0], im_size[1]])
         return inp, lab
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
@@ -213,13 +194,15 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count)
         # TODO need to figure out why memory issue?
         with tf.GradientTape() as tape:
-            pred = predict(inp)
+            pred = unet_model(inp)
             # TODO Fix this
 
             # loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
-            loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32)
+            loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32) # TODO how do we make this comparable 
             grad = tape.gradient(loss, unet_model.trainable_weights)
             optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
+            lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+            pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
             c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
     
         train_loss_lm.append([loss])
@@ -232,15 +215,16 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 cgt = []
                 img_v, lab_v, _ = next(val)
                 inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, im_size, lm_count)
-                pred_v = predict(inp_v) # (lm, batch, C, H, W)
+                pred_v = unet_model(inp_v) # (lm, batch, C, H, W)
+                val_loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab_v, pred_v), dtype=tf.float32)
                 
+                lab_v = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+                pred_v = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+                val_c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab_v, pred_v), dtype=tf.float32)
                 within_margin, closest_to_gt = per_kp_stats_iter(lab_v, pred_v, kp_margin)
-
+                
                 mrg.append(within_margin)
                 cgt.append(closest_to_gt)
-                val_loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab_v, pred_v), dtype=tf.float32)
-                val_c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab_v, pred_v), dtype=tf.float32)
-                
                 val_loss_lm.append([val_loss])
                 val_coord_dist_lm.append([val_c_dist])
                 mrg_lm.append(mrg)
@@ -260,22 +244,22 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tltxt:
                 np.savetxt(tltxt, [np.array(tl_mean)], fmt='%.3f', delimiter=",")
             tf.print("train coordinate distance: ", tcd_mean, summarize=-1)
-            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tcdtxt:
+            with open(os.path.join(log_path, 'train_coordd.txt'), 'ab') as tcdtxt:
                 np.savetxt(tcdtxt, [np.array(tcd_mean)], fmt='%.3f', delimiter=",")
             
             tf.print("validation loss (ssd): ", vl_mean, summarize=-1)
-            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as vltxt:
+            with open(os.path.join(log_path, 'val_loss.txt'), 'ab') as vltxt:
                 np.savetxt(vltxt, [np.array(vl_mean)], fmt='%.3f', delimiter=",")
             tf.print("validation coordinate distance: ", vcd_mean, summarize=-1)
-            with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as vcdtxt:
+            with open(os.path.join(log_path, 'val_coordd.txt'), 'ab') as vcdtxt:
                 np.savetxt(vcdtxt, [np.array(vcd_mean)], fmt='%.3f', delimiter=",")
 
             tf.print("% within margin: ", mrg_mean, summarize=-1)
-            with open(os.path.join(log_path, 'within_margin.txt'), 'ab') as mrgtxt:
+            with open(os.path.join(log_path, 'vaL_within_margin.txt'), 'ab') as mrgtxt:
                 np.savetxt(mrgtxt, [np.array(mrg_mean)], fmt='%3.3f', delimiter=",")
             mrgtxt.close()
             tf.print("% closest to gt", cgt_mean, summarize=-1)
-            with open(os.path.join(log_path, 'closest_gt.txt'), 'ab') as cgttxt:
+            with open(os.path.join(log_path, 'val_closest_gt.txt'), 'ab') as cgttxt:
                 np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
             cgttxt.close()
 
@@ -291,10 +275,10 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         if step % args.checkpoint_interval == 0:
             unet_model.save_weights(cp_path.format(step=step))
             print("saved cp-{:04d}".format(step))
-    # test = iter(dataset.test_data)
-    # for _ in range(args.num_test_samples):
-    #     img, lab, fn = next(test)
-    #     store_results(img, lab, unet_model, kp_list_in, fn, log_path)
+    test = iter(dataset.test_data)
+    for _ in range(args.num_test_samples):
+        img_t, lab_t, fn = next(test)
+        store_results_iter(img_t, lab_t, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size)
 
 def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=None, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     assert im_size is not None, "Please provide an image size to which to rescale the input to"
@@ -443,8 +427,25 @@ if __name__ == "__main__":
                                            "memory_vector_dim":256,
                                            "output_dim":16,
                                            "read_head_num":4,
-                                           "write_head_num":4}}
-}
+                                           "write_head_num":4}}}
+    # conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
+    #                                             "kernel_size":3,
+    #                                             "pool_size":[4,4]},
+    #                             "ntm_param":{"controller_units":256,
+    #                                         "memory_size":64,
+    #                                         "memory_vector_dim":256,
+    #                                         "output_dim":256,
+    #                                         "read_head_num":3,
+    #                                         "write_head_num":3}},
+    #             "2":{"enc_dec_param":{"num_filters":32,
+    #                                             "kernel_size":3,
+    #                                             "pool_size":[2,2]},
+    #                             "ntm_param":{"controller_units":256,
+    #                                         "memory_size":64,
+    #                                         "memory_vector_dim":256,
+    #                                         "output_dim":256,
+    #                                         "read_head_num":3,
+    #                                         "write_head_num":3}}}
 
     # List of experiments:
     # BIG TODO: check how long a training takes, adjust list of experiments accordingly
@@ -494,7 +495,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=32, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=1, im_size=[64, 64], train_pct=5, val_pct=5, test_pct=10, ntm_config=conf_pos02)    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=32, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=2, im_size=[64, 64], train_pct=5, val_pct=5, test_pct=10, ntm_config=conf_pos02)    # 	- batched, not batched
 	
 
 

@@ -19,7 +19,7 @@ class convnet2d(tf.keras.Model):
 
 
 class unet2d(tf.keras.Model):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, ntm_config=None, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): 
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, seq_len=None, ntm_config=None, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): 
         super(unet2d, self).__init__(name=name, **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
@@ -29,14 +29,14 @@ class unet2d(tf.keras.Model):
         self.batch_size = batch_size
         self.training = training
         self.im_size = im_size
+        self.seq_len = seq_len
         self.unet_rec = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, batch_size=self.batch_size, im_size=self.im_size)
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
-    @tf.function#(input_signature=[tf.TensorSpec(shape=[None,1,256,256], dtype=tf.float32)])
     def call(self, inputs):
         # TODO left at: this nested list stuff maybe works? How can we un-nest? Add constants for filler?
         states = []
-        output_list = tf.TensorArray(dtype=tf.float32, size=40)
+        output_list = tf.TensorArray(dtype=tf.float32, size=self.seq_len)
         _unet = self.unet_rec
         while _unet is not None:
             if _unet.ntm_enc_dec is not None:
@@ -45,7 +45,7 @@ class unet2d(tf.keras.Model):
                 states = [*states, tf.constant(0.)]
             _unet = _unet.unet_rec
         # states = tf.nest.flatten(states)
-        for i in range(40):
+        for i in range(self.seq_len):
             unet_2d, states = self.unet_rec(inputs[i], states)
             res = self.logits(unet_2d) # TODO payer et al do no activation ?
             output_list = output_list.write(i, res)
