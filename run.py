@@ -31,7 +31,7 @@ parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=5, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
-parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
 
 # Training options.
 parser.add_argument('--num_training_iterations', type=int, default=2000,
@@ -64,8 +64,8 @@ def ssd_loss(gt_labels, logits):
 
 @tf.function
 def coord_dist(y_true, y_pred):
-    y_pred = tf.map_fn(lambda x: tf.map_fn(get_max_indices, x), y_pred)
-    y_true = tf.map_fn(lambda y: tf.map_fn(get_max_indices, y), y_true)
+    y_pred = tf.cast(get_max_indices_argmax(y_pred), tf.float32)
+    y_true = tf.cast(get_max_indices_argmax(y_true), tf.float32)
     return tf.keras.losses.MeanAbsoluteError()(y_true, y_pred)#tf.nn.l2_loss(y_true-y_pred) /args.batch_size
 
 @tf.function
@@ -200,10 +200,12 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-    train = iter(dataset.data)
+    train = iter(dataset.train_data)
     val = iter(dataset.val_data)
     
+    train_loss = []
     train_loss_lm = []
+    val_loss = []
     val_loss_lm = []
     train_coord_dist_lm = []
     val_coord_dist_lm = []
@@ -228,7 +230,8 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
             kp_loss = tf.map_fn(lambda y: ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32)
             c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
-    
+
+        train_loss.append(loss)
         train_loss_lm.append([kp_loss])
         train_coord_dist_lm.append([c_dist])
         
@@ -239,21 +242,26 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 cgt = []
                 img_v, lab_v, _ = next(val)
                 inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, im_size, lm_count)
-                pred_v = unet_model(inp_v) # (lm, batch, C, H, W)
-                val_loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab_v, pred_v), dtype=tf.float32)
                 
-                lab_v = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
-                pred_v = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+                pred_v = unet_model(inp_v) # (lm, batch, C, H, W)
+                val_loss.append(ssd_loss(lab_v, pred_v))
+
+                lab_v = tf.reshape(lab_v, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+                pred_v = tf.reshape(pred_v, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+                
+                kp_val_loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab_v, pred_v), dtype=tf.float32)
                 val_c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab_v, pred_v), dtype=tf.float32)
                 within_margin, closest_to_gt = per_kp_stats_iter(lab_v, pred_v, kp_margin)
                 
                 mrg.append(within_margin)
                 cgt.append(closest_to_gt)
-                val_loss_lm.append([val_loss])
+                val_loss_lm.append([kp_val_loss])
                 val_coord_dist_lm.append([val_c_dist])
                 mrg_lm.append(mrg)
                 cgt_lm.append(cgt)
-                
+        
+            t_mean = tf.reduce_mean(train_loss)
+            v_mean = tf.reduce_mean(val_loss)
             tl_mean = tf.squeeze(tf.reduce_mean(train_loss_lm, axis=0))
             tcd_mean = tf.squeeze(tf.reduce_mean(train_coord_dist_lm, axis=0))
             vl_mean = tf.squeeze(tf.reduce_mean(val_loss_lm, axis=0))
@@ -264,16 +272,24 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             elapsed_time = int(time.time() - start_time)
             tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
             
-            tf.print("train loss per kp (ssd): ", tl_mean, summarize=-1)
+            tf.print("mean train loss since last update:", t_mean, summarize=-1)
             with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tltxt:
-                np.savetxt(tltxt, [np.array(tl_mean)], fmt='%.3f', delimiter=",")
+                np.savetxt(tltxt, [np.array(t_mean)], fmt='%.3f', delimiter=",")
+
+            tf.print("train loss per kp (ssd): ", tl_mean, summarize=-1)
+            with open(os.path.join(log_path, 'train_loss_kp.txt'), 'ab') as tlkptxt:
+                np.savetxt(tlkptxt, [np.array(tl_mean)], fmt='%.3f', delimiter=",")
             tf.print("train coordinate distance: ", tcd_mean, summarize=-1)
             with open(os.path.join(log_path, 'train_coordd.txt'), 'ab') as tcdtxt:
                 np.savetxt(tcdtxt, [np.array(tcd_mean)], fmt='%.3f', delimiter=",")
             
-            tf.print("validation loss (ssd): ", vl_mean, summarize=-1)
+            tf.print("mean val loss since last update:", v_mean, summarize=-1)
             with open(os.path.join(log_path, 'val_loss.txt'), 'ab') as vltxt:
-                np.savetxt(vltxt, [np.array(vl_mean)], fmt='%.3f', delimiter=",")
+                np.savetxt(vltxt, [np.array(v_mean)], fmt='%.3f', delimiter=",")
+
+            tf.print("validation loss per kp (ssd): ", vl_mean, summarize=-1)
+            with open(os.path.join(log_path, 'val_loss_kp.txt'), 'ab') as vlkptxt:
+                np.savetxt(vlkptxt, [np.array(vl_mean)], fmt='%.3f', delimiter=",")
             tf.print("validation coordinate distance: ", vcd_mean, summarize=-1)
             with open(os.path.join(log_path, 'val_coordd.txt'), 'ab') as vcdtxt:
                 np.savetxt(vcdtxt, [np.array(vcd_mean)], fmt='%.3f', delimiter=",")
@@ -287,7 +303,9 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
             cgttxt.close()
 
+            train_loss =[]
             train_loss_lm = []
+            val_loss = []
             val_loss_lm = []
             train_coord_dist_lm = []
             val_coord_dist_lm = []
@@ -345,7 +363,7 @@ def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=No
         return unet_model(img)
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-    train = iter(dataset.data)
+    train = iter(dataset.train_data)
     val = iter(dataset.val_data)
     train_loss = []
     val_loss = []
@@ -536,7 +554,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=2, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 
 

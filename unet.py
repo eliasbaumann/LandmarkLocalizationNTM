@@ -35,7 +35,7 @@ class unet2d(tf.keras.Model):
 
     def call(self, inputs):
         states = []
-        output_list = tf.TensorArray(dtype=tf.float32, size=self.seq_len)
+        out = []
         _unet = self.unet_rec
         while _unet is not None:
             if _unet.ntm_enc_dec is not None:
@@ -47,8 +47,8 @@ class unet2d(tf.keras.Model):
         for i in range(self.seq_len):
             unet_2d, states = self.unet_rec(inputs[i], states)
             res = self.logits(unet_2d) # TODO payer et al do no activation ?
-            output_list = output_list.write(i, res)
-        return output_list.stack()
+            out.append(res)
+        return tf.stack(out, axis=0)
 
 
 

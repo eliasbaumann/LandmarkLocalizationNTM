@@ -25,7 +25,7 @@ class Data_Loader():
         self.repeat = repeat
         self.prefetch = prefetch
         self.n_aug_rounds = n_aug_rounds
-        self.data = None
+        self.train_data = None
         self.val_data = None
         self.test_data = None
         self.n_landmarks = None
@@ -37,49 +37,49 @@ class Data_Loader():
     def __call__(self, im_size=None, keypoints=None):
         print("Creating Datasets...")
         self.keypoints = keypoints
-        if self.name == 'droso':
-            self.load_droso()
+
+        data = self.load_droso()
             
-        elif self.name == 'cephal':
-            self.load_cephal()
+        if self.name == 'cephal':
+            data = self.load_cephal()
         
-        self.resize_images(im_size)
-        #self.data = self.data.shuffle(buffer_size=256) #TODO add this for actual runs, 
+        data = self.resize_images(data, im_size)
+        # data = data.shuffle(buffer_size=self.ds_size) #TODO add this for actual runs, 
         
         # train test val split (take and skip)
         n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
         n_val_obs = int(self.ds_size * (self.val_pct/100.0) - (self.ds_size * (self.val_pct/100.0) % self.batch_size))
         n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
-        train_data = self.data.take(n_train_obs)
-        self.test_data = self.data.skip(n_train_obs)
-        self.val_data = self.test_data.take(n_val_obs)
-        self.test_data = self.test_data.skip(n_val_obs)
-        self.test_data = self.test_data.take(n_test_obs) 
-        self.data = train_data
-
-        self.augment_data(im_size)
+       
+        self.train_data = data.take(n_train_obs)
+        self.val_data = data.skip(n_train_obs).take(n_val_obs)
+        self.test_data = data.skip(n_train_obs+n_val_obs).take(n_test_obs)
+       
+        self.train_data = self.augment_data(self.train_data, im_size)
 
         if self.keypoints is not None:
-            self.kp_to_input(self.keypoints)
+            self.train_data, self.val_data, self.test_dataself = self.kp_to_input(self.train_data, self.val_data, self.test_data, self.keypoints)
         
         if self.repeat:
-            self.data = self.data.repeat()
+            self.train_data = self.train_data.repeat()
             self.val_data = self.val_data.repeat()
+            self.test_data = self.test_data.repeat()
         
-        self.data = self.data.batch(self.batch_size, drop_remainder = True)
+        self.train_data = self.train_data.batch(self.batch_size, drop_remainder = True)
         self.val_data = self.val_data.batch(self.batch_size, drop_remainder=True)
         self.test_data = self.test_data.batch(self.batch_size, drop_remainder=True)
 
         
         if self.prefetch:
-            self.data = self.data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+            self.train_data = self.train_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+            self.val_data = self.val_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
         print("Datasets loaded")
 
     def convert_to_hm(self, keypoints, im_size):
         heatmaps = Heatmap_Generator(im_size,self.n_landmarks, 3).generate_heatmaps(keypoints) #TODO parameterize
         return heatmaps
 
-    def resize_images(self, im_size):   
+    def resize_images(self, data, im_size):   
         def _albu_resize(image, keypoints):
             transformed = albu.Compose([albu.Resize(im_size[0], im_size[1])], 
                                        p=1, keypoint_params=albu.KeypointParams(format='xy',remove_invisible=True))(image=image, keypoints=keypoints)
@@ -101,9 +101,9 @@ class Data_Loader():
         def convert_all(images, keypoints, filename):
             return tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_resize)
 
-        self.data = self.data.flat_map(convert_all)
+        return data.flat_map(convert_all)
 
-    def augment_data(self, im_size):
+    def augment_data(self, data, im_size):
         def _albu_transform(image, keypoints):
             image = np.stack((image,keypoints),axis=0)
             transformed = albu.Compose([albu.ElasticTransform(p=.5),
@@ -137,10 +137,10 @@ class Data_Loader():
                 regular_ds.concatenate(aug_ds)
             return regular_ds
         
-        self.data = self.data.flat_map(generate_augmentations)
+        return data.flat_map(generate_augmentations)
 
     
-    def kp_to_input(self, kp_list):
+    def kp_to_input(self, data, val_data, test_data , kp_list):
         """
         This function allows to input keypoints into the model 
         by selecting with a list, always starting with 0 
@@ -160,9 +160,7 @@ class Data_Loader():
             return tf.data.Dataset.from_tensors((inp, lab, fn))
 
 
-        self.data = self.data.flat_map(resplit)
-        self.val_data = self.val_data.flat_map(resplit)
-        self.test_data = self.test_data.flat_map(resplit)
+        return data.flat_map(resplit), val_data.flat_map(resplit), test_data.flat_map(resplit)
 
     def load_cephal(self):
         self.n_landmarks = 19
@@ -178,7 +176,7 @@ class Data_Loader():
             label = tf.strings.to_number(label, out_type=tf.dtypes.int32)
             return img, label
 
-        self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        return list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         
 
     def load_droso(self):
@@ -200,6 +198,6 @@ class Data_Loader():
             label = tf.concat([w,h],axis=1)
             return img, label, file_name
         
-        self.data = list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        return list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         
         #self.im_size = decode_image(str(PATH+self.name+'/images/NG-SP196-909-0001.jpg')).shape
