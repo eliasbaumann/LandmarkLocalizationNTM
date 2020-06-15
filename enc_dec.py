@@ -43,8 +43,7 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
         self.ds = [tf.keras.layers.AveragePooling2D(pool_size=i, strides=self.pool_size, data_format='channels_first', name='enc_dec_ds_%d_%d' % (self.layer, i)) for i in self.pool_size]
         self.us = [tf.keras.layers.UpSampling2D(size=i, data_format='channels_first', name='enc_dec_us_%d_%d' % (self.layer, i)) for i in self.pool_size[::-1]]
 
-        self.flat = tf.keras.layers.Flatten(data_format='channels_first', name='enc_dec_flat_%d' % self.layer)
-        
+        self.flat = tf.keras.layers.Flatten(data_format='channels_first', name='enc_dec_flat_%d' % self.layer)        
 
     def call(self, x, state):
         for i in range(len(self.pool_size)):
@@ -57,7 +56,7 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
             x = self.flat(x)
             # state = self.cell.get_initial_state(self.batch_size)
             ntm_out, state = self.cell(x, state)
-            x = tf.reshape(ntm_out, [self.batch_size, -1, self.dim, self.dim]) # Output_dim always has to have a square root
+            x = tf.reshape(ntm_out, [self.batch_size, 1, self.dim, self.dim]) # Output_dim always has to have a square root
 
         for i in range(len(self.pool_size)):
             x = self.conv[i+len(self.pool_size)](x)

@@ -16,34 +16,35 @@ from ntm_configs import CONF_POS_LIST, CONF_MEM_LIST
 
 parser = argparse.ArgumentParser()
 
-physical_devices = tf.config.list_physical_devices('GPU')
-try:
-  tf.config.experimental.set_memory_growth(physical_devices[0], True)
-except:
-  # Invalid device or cannot modify virtual devices once initialized.
-  pass
+# physical_devices = tf.config.list_physical_devices('GPU')
+# try:
+#   tf.config.experimental.set_memory_growth(physical_devices[0], True)
+# except:
+#   # Invalid device or cannot modify virtual devices once initialized.
+#   pass
 
+# TODO something is still off, stuck at 581 loss?? why is that, run for 400 iterations
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
-parser.add_argument('--num_test_samples', type=int, default=2, help='Number of samples from test to predict and save')
+parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
+parser.add_argument('--num_test_samples', type=int, default=5, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
-parser.add_argument('--learning_rate', type=float, default=1e-5, help='Optimizer learning rate.')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.')
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=1,
+parser.add_argument('--num_training_iterations', type=int, default=2000,
                         help='Number of iterations to train for.')
-parser.add_argument('--validation_steps', type=int, default=2,
+parser.add_argument('--validation_steps', type=int, default=5,
                         help='Number of validation steps after every epoch.')
-parser.add_argument('--report_interval', type=int, default=10,
+parser.add_argument('--report_interval', type=int, default=50,
                         help='Iterations between reports (samples, valid loss).')
-parser.add_argument('--checkpoint_interval', type=int, default=1000,
+parser.add_argument('--checkpoint_interval', type=int, default=100,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-tf.config.experimental_run_functions_eagerly(True)
+# tf.config.experimental_run_functions_eagerly(True)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy()
@@ -166,15 +167,14 @@ def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_si
 @tf.function
 def convert_input(img, lab, lm, im_size, lm_count):
     ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
-    
-    img = tf.repeat(tf.transpose(img, [1,0,2,3]), lm, axis=0)
-    ep_lab = tf.transpose(tf.concat([ep_lab, lab[:,0:lm-lm_count,:,:]], axis=1), [1,0,2,3])
-    
-    img = tf.reshape(img, [-1, tf.shape(img)[1], lm_count, im_size[0], im_size[1]])
-    ep_lab = tf.reshape(ep_lab, [-1, tf.shape(img)[1], lm_count, im_size[0], im_size[1]])
-
-    inp = tf.concat([img,ep_lab], axis=2)
-    lab = tf.reshape(tf.expand_dims(tf.transpose(lab, [1,0,2,3]), axis=2), [-1, tf.shape(img)[1], lm_count, im_size[0], im_size[1]])
+    img = tf.expand_dims(tf.repeat(img, lm//lm_count, axis=1), axis=2)
+    ep_lab = tf.concat([ep_lab, lab[:,0:lm-lm_count,:,:]], axis=1)
+    ep_lab = tf.stack(tf.split(ep_lab, lm//lm_count, axis=1), axis=1)
+    inp = tf.concat([img, ep_lab], axis=2)
+    lab = tf.split(lab, lm//lm_count, axis=1)
+    lab = tf.stack(lab, axis=1)
+    inp = tf.transpose(inp, [1,0,2,3,4])
+    lab = tf.transpose(lab, [1,0,2,3,4])
     return inp, lab
 
 def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
@@ -185,7 +185,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     
     
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.int32)
-    dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct)
+    dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct, n_aug_rounds=10)
     dataset(im_size=im_size)
 
     unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, seq_len=dataset.n_landmarks//lm_count, ntm_config=ntm_config, batch_size=args.batch_size)
@@ -212,22 +212,24 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     tf.print("Starting train loop...")
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
-        img, lab, _ = next(train) # img shape: 4,1,64,64, lab shape: 4,40,64,64
-        inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count) # img shape: 20,4,4,64,64, lab shape: 20,4,2,64,64
-        # TODO need to figure out why memory issue?
+        img, lab, _ = next(train) 
+        inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count)
         with tf.GradientTape() as tape:
             pred = unet_model(inp)
             # TODO Fix this
 
             # loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
-            loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32) # TODO how do we make this comparable 
+            loss = ssd_loss(lab, pred)
             grad = tape.gradient(loss, unet_model.trainable_weights)
             optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
+
+
             lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
             pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+            kp_loss = tf.map_fn(lambda y: ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32)
             c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
     
-        train_loss_lm.append([loss])
+        train_loss_lm.append([kp_loss])
         train_coord_dist_lm.append([c_dist])
         
         if step % args.report_interval == 0:
@@ -262,7 +264,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             elapsed_time = int(time.time() - start_time)
             tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
             
-            tf.print("train loss (ssd): ", tl_mean, summarize=-1)
+            tf.print("train loss per kp (ssd): ", tl_mean, summarize=-1)
             with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tltxt:
                 np.savetxt(tltxt, [np.array(tl_mean)], fmt='%.3f', delimiter=",")
             tf.print("train coordinate distance: ", tcd_mean, summarize=-1)
@@ -434,57 +436,57 @@ def load_dir(path, run_number, step):
 
 if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":32,
+    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":16,
                                                "kernel_size":3,
-                                               "pool_size":[4,2]},
+                                               "pool_size":[4,4]},
                               "ntm_param":{"controller_units":256,
                                            "memory_size":64,
                                            "memory_vector_dim":256,
-                                           "output_dim":64,
-                                           "read_head_num":1,
-                                           "write_head_num":1}}
+                                           "output_dim":256,
+                                           "read_head_num":3,
+                                           "write_head_num":3}}
                         }
     standard_ed_conf = {"0":{"enc_dec_param":{"num_filters":64,
                                                "kernel_size":3,
                                                "pool_size":[4,4]},
                               "ntm_param":None}
                         }
-    conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
-                                               "kernel_size":3,
-                                               "pool_size":[4,2]},
-                              "ntm_param":{"controller_units":256,
-                                           "memory_size":64,
-                                           "memory_vector_dim":256,
-                                           "output_dim":64,
-                                           "read_head_num":2,
-                                           "write_head_num":2}},
-            "2":{"enc_dec_param":{"num_filters":32,
-                                               "kernel_size":3,
-                                               "pool_size":[2,2]},
-                              "ntm_param":{"controller_units":256,
-                                           "memory_size":64,
-                                           "memory_vector_dim":256,
-                                           "output_dim":16,
-                                           "read_head_num":4,
-                                           "write_head_num":4}}}
     # conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
-    #                                             "kernel_size":3,
-    #                                             "pool_size":[4,4]},
-    #                             "ntm_param":{"controller_units":256,
-    #                                         "memory_size":64,
-    #                                         "memory_vector_dim":256,
-    #                                         "output_dim":256,
-    #                                         "read_head_num":3,
-    #                                         "write_head_num":3}},
-    #             "2":{"enc_dec_param":{"num_filters":32,
-    #                                             "kernel_size":3,
-    #                                             "pool_size":[2,2]},
-    #                             "ntm_param":{"controller_units":256,
-    #                                         "memory_size":64,
-    #                                         "memory_vector_dim":256,
-    #                                         "output_dim":256,
-    #                                         "read_head_num":3,
-    #                                         "write_head_num":3}}}
+    #                                            "kernel_size":3,
+    #                                            "pool_size":[4,2]},
+    #                           "ntm_param":{"controller_units":256,
+    #                                        "memory_size":64,
+    #                                        "memory_vector_dim":256,
+    #                                        "output_dim":64,
+    #                                        "read_head_num":2,
+    #                                        "write_head_num":2}},
+    #         "2":{"enc_dec_param":{"num_filters":32,
+    #                                            "kernel_size":3,
+    #                                            "pool_size":[2,2]},
+    #                           "ntm_param":{"controller_units":256,
+    #                                        "memory_size":64,
+    #                                        "memory_vector_dim":256,
+    #                                        "output_dim":16,
+    #                                        "read_head_num":4,
+    #                                        "write_head_num":4}}}
+    conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
+                                                "kernel_size":3,
+                                                "pool_size":[4,4]},
+                                "ntm_param":{"controller_units":256,
+                                            "memory_size":64,
+                                            "memory_vector_dim":256,
+                                            "output_dim":256,
+                                            "read_head_num":3,
+                                            "write_head_num":3}},
+                "2":{"enc_dec_param":{"num_filters":32,
+                                                "kernel_size":3,
+                                                "pool_size":[2,2]},
+                                "ntm_param":{"controller_units":256,
+                                            "memory_size":64,
+                                            "memory_vector_dim":256,
+                                            "output_dim":256,
+                                            "read_head_num":3,
+                                            "write_head_num":3}}}
 
     # List of experiments:
     # BIG TODO: check how long a training takes, adjust list of experiments accordingly
@@ -534,7 +536,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=32, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=2, im_size=[64, 64], train_pct=5, val_pct=5, test_pct=10, ntm_config=conf_pos02)    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=2, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 
 
