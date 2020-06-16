@@ -5,6 +5,7 @@ import random
 
 import numpy as np
 import tensorflow as tf
+from cyclic_learning import ExponentialCyclicalLearningRate# from tensorflow_addons.optimizers import ExponentialCyclicalLearningRate
 
 import matplotlib.pyplot as plt
 import cv2
@@ -31,16 +32,16 @@ parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=5, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
-parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
+parser.add_argument('--learning_rate', type=float, default=1e-4, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=2000,
+parser.add_argument('--num_training_iterations', type=int, default=5000,
                         help='Number of iterations to train for.')
 parser.add_argument('--validation_steps', type=int, default=5,
                         help='Number of validation steps after every epoch.')
 parser.add_argument('--report_interval', type=int, default=50,
                         help='Iterations between reports (samples, valid loss).')
-parser.add_argument('--checkpoint_interval', type=int, default=100,
+parser.add_argument('--checkpoint_interval', type=int, default=500,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
@@ -80,11 +81,12 @@ def get_max_indices(logits):
 # TODO use this for other functions than per_kp_stats_iter
 @tf.function
 def get_max_indices_argmax(logits):
-    flat_logits = tf.reshape(logits, [tf.shape(logits)[0], tf.shape(logits)[1], tf.shape(logits)[2], -1])
-    max_val = tf.cast(tf.argmax(flat_logits, axis=3), tf.int32)
+    asdf = tf.concat([tf.shape(logits)[:-2], [-1]], axis=0)
+    flat_logits = tf.reshape(logits, asdf)
+    max_val = tf.cast(tf.argmax(flat_logits, axis=-1), tf.int32)
     x = max_val // tf.shape(logits)[-1]
     y = max_val % tf.shape(logits)[-1]
-    res =  tf.concat((x,y), axis=2)
+    res =  tf.concat((x,y), axis=-1)
     return res
 
 @tf.function
@@ -199,7 +201,16 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
 
-    optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    lr_schedule = ExponentialCyclicalLearningRate(
+            initial_learning_rate=1e-5,
+            maximal_learning_rate=1e-2,
+            step_size=100,
+            scale_mode="cycle",
+            gamma=0.96,
+            name="exp_cyclic_scheduler")
+
+    # optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
     train = iter(dataset.train_data)
     val = iter(dataset.val_data)
     
@@ -211,6 +222,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     val_coord_dist_lm = []
     mrg_lm = []
     cgt_lm = []
+
     tf.print("Starting train loop...")
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
@@ -228,7 +240,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
 
             lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
             pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
-            kp_loss = tf.map_fn(lambda y: ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32)
+            kp_loss = tf.map_fn(lambda y: ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) #TODO weird results on coord dist
             c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
 
         train_loss.append(loss)
@@ -271,7 +283,6 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             
             elapsed_time = int(time.time() - start_time)
             tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
-            
             tf.print("mean train loss since last update:", t_mean, summarize=-1)
             with open(os.path.join(log_path, 'train_loss.txt'), 'ab') as tltxt:
                 np.savetxt(tltxt, [np.array(t_mean)], fmt='%.3f', delimiter=",")
