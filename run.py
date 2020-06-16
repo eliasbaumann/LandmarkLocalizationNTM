@@ -32,7 +32,7 @@ parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=5, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
-parser.add_argument('--learning_rate', type=float, default=1e-4, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
 
 # Training options.
 parser.add_argument('--num_training_iterations', type=int, default=5000,
@@ -202,15 +202,18 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
 
     lr_schedule = ExponentialCyclicalLearningRate(
-            initial_learning_rate=1e-5,
+            initial_learning_rate=1e-4,
             maximal_learning_rate=1e-2,
-            step_size=100,
+            step_size=200,
             scale_mode="cycle",
             gamma=0.96,
             name="exp_cyclic_scheduler")
 
+    lr_schedule_2 = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=args.learning_rate, decay_steps=500, decay_rate=.9)
+
     # optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule_2, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    # optimizer = tf.keras.optimizers.SGD(learning_rate=args.learning_rate, momentum=.9)
     train = iter(dataset.train_data)
     val = iter(dataset.val_data)
     
