@@ -70,6 +70,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
                                   activation=self.activation,
                                   name='unet_left_%i'%self.layer)
         self.ntm_enc_dec = None
+        self.add = tf.keras.layers.Add(name='ntm_out_add_%i' %self.layer)
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
                 assert self.batch_size is not None, 'Please set batch_size in unet2d init'
@@ -110,7 +111,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
                 mem, state = self.ntm_enc_dec(f_left, prev_state[self.layer])
-                f_left = tf.concat([mem, f_left], axis=1)
+                f_left = self.add([mem, f_left]) #tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)
