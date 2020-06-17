@@ -37,9 +37,9 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
         self.pool_size = ntm_config["enc_dec_param"]["pool_size"]
         
         self.dim = tf.sqrt(tf.cast(self.output_dim, tf.float32))
-        self.conv = [tf.keras.layers.Conv2D(filters=self.num_filters, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_conv_%d_%d' % (self.layer, i)) for i in range(len(self.pool_size)*2+1)]
+        self.conv = [tf.keras.layers.Conv2D(filters=self.num_filters, kernel_size=self.kernel_size, activation=tf.nn.leaky_relu, padding='same', data_format='channels_first', name='enc_dec_conv_%d_%d' % (self.layer, i)) for i in range(len(self.pool_size)*2+1)]
 
-        self.conv_enc = tf.keras.layers.Conv2D(filters=1, kernel_size=self.kernel_size, activation='relu', padding='same', data_format='channels_first', name='enc_dec_last_enc')
+        self.conv_enc = tf.keras.layers.Conv2D(filters=1, kernel_size=self.kernel_size, activation=tf.nn.leaky_relu, padding='same', data_format='channels_first', name='enc_dec_last_enc')
         self.ds = [tf.keras.layers.AveragePooling2D(pool_size=i, strides=self.pool_size, data_format='channels_first', name='enc_dec_ds_%d_%d' % (self.layer, i)) for i in self.pool_size]
         self.us = [tf.keras.layers.UpSampling2D(size=i, data_format='channels_first', name='enc_dec_us_%d_%d' % (self.layer, i)) for i in self.pool_size[::-1]]
 

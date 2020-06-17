@@ -54,7 +54,7 @@ class unet2d(tf.keras.Model):
 
 
 class unet(tf.keras.layers.AbstractRNNCell):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.keras.activations.relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.nn.leaky_relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
         super(unet, self).__init__(name=name+'_'+str(layer))
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
@@ -111,7 +111,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
                 mem, state = self.ntm_enc_dec(f_left, prev_state[self.layer])
-                f_left = self.add([mem, f_left]) #tf.concat([mem, f_left], axis=1)
+                f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left)
@@ -143,7 +143,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
         
 
 class conv_pass(tf.keras.layers.Layer):
-    def __init__(self, kernel_size, num_fmaps, num_repetitions, activation=tf.keras.activations.relu, name='conv_pass', **kwargs):
+    def __init__(self, kernel_size, num_fmaps, num_repetitions, activation=tf.nn.leaky_relu, name='conv_pass', **kwargs):
         super(conv_pass, self).__init__(name=name, **kwargs)
         self.kernel_size = kernel_size
         self.num_fmaps = num_fmaps
@@ -184,7 +184,7 @@ class downsample(tf.keras.layers.Layer):
         return config
 
 class upsample(tf.keras.layers.Layer):
-    def __init__(self, factors, num_fmaps, activation=tf.keras.activations.relu, name='us', **kwargs):
+    def __init__(self, factors, num_fmaps, activation=tf.nn.leaky_relu, name='us', **kwargs):
         super(upsample, self).__init__(name=name, **kwargs)
         self.factors = factors
         self.num_fmaps = num_fmaps
