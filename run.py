@@ -17,12 +17,12 @@ from ntm_configs import CONF_POS_LIST, CONF_MEM_LIST
 
 parser = argparse.ArgumentParser()
 
-# physical_devices = tf.config.list_physical_devices('GPU')
-# try:
-#   tf.config.experimental.set_memory_growth(physical_devices[0], True)
-# except:
-#   # Invalid device or cannot modify virtual devices once initialized.
-#   pass
+physical_devices = tf.config.list_physical_devices('GPU')
+try:
+  tf.config.experimental.set_memory_growth(physical_devices[0], True)
+except:
+  # Invalid device or cannot modify virtual devices once initialized.
+  pass
 
 # TODO something is still off, stuck at 581 loss?? why is that, run for 400 iterations
 
@@ -168,9 +168,10 @@ def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_si
     
 @tf.function
 def convert_input(img, lab, lm, im_size, lm_count):
-    ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
+    ep_lab_0 = tf.fill(tf.shape(lab[:,0:lm_count,:,:]), -1e-4)
+    # ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
     img = tf.expand_dims(tf.repeat(img, lm//lm_count, axis=1), axis=2)
-    ep_lab = tf.concat([ep_lab, lab[:,0:lm-lm_count,:,:]], axis=1)
+    ep_lab = tf.concat([ep_lab_0, lab[:,0:lm-lm_count,:,:]], axis=1)
     ep_lab = tf.stack(tf.split(ep_lab, lm//lm_count, axis=1), axis=1)
     inp = tf.concat([img, ep_lab], axis=2)
     lab = tf.split(lab, lm//lm_count, axis=1)
@@ -238,7 +239,8 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             # loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
             loss = ssd_loss(lab, pred)
             grad = tape.gradient(loss, unet_model.trainable_weights)
-            optimizer.apply_gradients(zip(grad, unet_model.trainable_weights)) # tf.clip_by_global_norm
+            clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
+            optimizer.apply_gradients(zip(clipped_grad, unet_model.trainable_weights))
 
 
             lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
@@ -483,6 +485,17 @@ if __name__ == "__main__":
                                                "pool_size":[4,4]},
                               "ntm_param":None}
                         }
+
+    big_ntm_conf = {"0":{"enc_dec_param":{"num_filters":16,
+                                               "kernel_size":3,
+                                               "pool_size":[4,4]},
+                              "ntm_param":{"controller_units":512,
+                                           "memory_size":128,
+                                           "memory_vector_dim":512,
+                                           "output_dim":256,
+                                           "read_head_num":3,
+                                           "write_head_num":3}}
+                        }               
     # conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
     #                                            "kernel_size":3,
     #                                            "pool_size":[4,2]},
@@ -568,7 +581,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 
 
