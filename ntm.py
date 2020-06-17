@@ -179,7 +179,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             u_norm = tf.sqrt(tf.reduce_sum(tf.square(u), axis=1, keepdims=True))
             v_norm = tf.sqrt(tf.reduce_sum(tf.square(v), axis=2, keepdims=True))
             denom = v_norm * u_norm
-            return tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
+            return tf.squeeze(nom / (denom + 1e-8))#tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
     @tf.function
     def get_initial_state(self):
