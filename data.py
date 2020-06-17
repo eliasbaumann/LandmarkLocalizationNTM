@@ -108,7 +108,7 @@ class Data_Loader():
             image = np.stack((image,keypoints),axis=0)
             transformed = albu.Compose([albu.ElasticTransform(p=.5),
                                         albu.Flip(p=.5),
-                                        albu.RandomSizedCrop((int(.5*im_size[0]),int(.9*im_size[0])),im_size[0],
+                                        albu.RandomSizedCrop((int(.7*im_size[0]),int(.9*im_size[0])),im_size[0],
                                                               im_size[1],w2h_ratio=float(im_size[1])/float(im_size[0]),p=.5),
                                         albu.ShiftScaleRotate(shift_limit=.1,scale_limit=.1,rotate_limit=90,p=.5)],
                                        p=1)(image=image)
