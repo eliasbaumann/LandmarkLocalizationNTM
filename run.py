@@ -28,14 +28,14 @@ except:
 
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
-parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
 parser.add_argument('--num_test_samples', type=int, default=5, help='Number of samples from test to predict and save')
 
 # Optimizer parameters.
 parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=1,
+parser.add_argument('--num_training_iterations', type=int, default=5000,
                         help='Number of iterations to train for.')
 parser.add_argument('--validation_steps', type=int, default=5,
                         help='Number of validation steps after every epoch.')
@@ -45,7 +45,7 @@ parser.add_argument('--checkpoint_interval', type=int, default=500,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-tf.config.experimental_run_functions_eagerly(True)
+# tf.config.experimental_run_functions_eagerly(True)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy() # h,w
@@ -627,8 +627,8 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    # iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
-    test_pipeline(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
+    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
+    # test_pipeline(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 
 

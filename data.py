@@ -1,4 +1,5 @@
 import pathlib
+import warnings
 import tensorflow as tf
 
 import imgaug as ia
@@ -117,7 +118,9 @@ class Data_Loader():
                                                        mode="constant")),
                                   sometimes(iaa.ElasticTransformation(alpha=(0.0, 40.0), sigma=(4.0, 8.0), cval=1e-5, mode="constant")),
                                   ], random_order=True)
-            image_aug = seq.augment_image(image=image)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning) # only doing this because imgaug warns me that my "image" is stacked with its heatmaps
+                image_aug = seq.augment_image(image=image)
             image_aug = np.transpose(image_aug, (2,0,1))
             image = image_aug[:1]
             keypoints = image_aug[1:]
