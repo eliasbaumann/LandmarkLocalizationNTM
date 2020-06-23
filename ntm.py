@@ -12,11 +12,11 @@ def create_linear_initializer(input_size):
 # https://github.com/MarkPKCollier/NeuralTuringMachine/blob/master/ntm.py / https://github.com/snowkylin/ntm/blob/master/model_v2.py # they have lots of overlap
 class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
-    memory_mode: 'matrix' -> store matrices, 'embedding' -> create embedding and store
+    
     '''
     def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size, layer,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
-                 init_mode='constant', memory_mode='encoder', name='ntm_cell'):
+                 init_mode='constant', name='ntm_cell'):
         super(NTMCell, self).__init__(name=name)
         # self.controller_layers = controller_layers
         self.controller_units = controller_units
@@ -33,18 +33,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.layer = layer
 
         self._ds = tf.keras.layers.MaxPooling2D(pool_size=(8,8), name='ntm_pool2d')
-
-        # ########### TODO: Matrix mode:
-        # # TODO trying this using the already done implementation of convlstm2d        
-        # self._controller = tf.keras.layers.ConvLSTM2DCell(filters=self.num_heads+2*self.write_head_num+1, kernel_size=3) # This needs to output CxC matrix K_t, and maybe a second matrix which is then used for other parameters?
-        # # with multiple heads this needs to scale up?
-        # self.num_params_per_head = 1+1+(self.shift_range*2+1)+1
-
-        # self._ctrl2p = tf.keras.layers.Dense(units=self.num_heads*self.num_params_per_head, activation=None) # Outputs: keystrength scalar beta_t, interpolation gate scalar g_t, shift weighting vector s_t (length n_memory rows), sharpening scalar gamma_t
-
-        # self._ctrl2o = tf.keras.layers.Conv2D()#TODO how should the output look like?
-        
-        # ########### TODO: encoder mode:
 
         self._controller = tf.keras.layers.LSTMCell(units=self.controller_units)
 

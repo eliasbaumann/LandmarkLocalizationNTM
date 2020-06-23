@@ -24,8 +24,6 @@ except:
   # Invalid device or cannot modify virtual devices once initialized.
   pass
 
-# TODO something is still off, stuck at 581 loss?? why is that, run for 400 iterations
-
 # Task
 parser.add_argument('--dataset', type=str, default='droso', help='select dataset based on name (droso, cepha, ?hands?)')
 parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
@@ -35,7 +33,7 @@ parser.add_argument('--num_test_samples', type=int, default=5, help='Number of s
 parser.add_argument('--learning_rate', type=float, default=1e-3, help='Optimizer learning rate.') # TODO figure something out here, maybe cyclic learning rate to get out of local minima?
 
 # Training options.
-parser.add_argument('--num_training_iterations', type=int, default=5000,
+parser.add_argument('--num_training_iterations', type=int, default=1,
                         help='Number of iterations to train for.')
 parser.add_argument('--validation_steps', type=int, default=5,
                         help='Number of validation steps after every epoch.')
@@ -45,7 +43,7 @@ parser.add_argument('--checkpoint_interval', type=int, default=500,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-# tf.config.experimental_run_functions_eagerly(True)
+tf.config.experimental_run_functions_eagerly(True)
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy() # h,w
@@ -137,18 +135,18 @@ def store_results(img, label, model, kp_list, fn, path):
     vis_points(img.numpy().squeeze(), lab_kp.numpy()[0], 5, given_kp)
     plt.savefig(path+'\\samples\\'+filename+'_gt.png')
 
-def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_size, kp_margin):
+def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_size, kp_margin, test_mode=True):
     filenames = [i.decode('UTF-8') for i in fn.numpy()]
-    inp, lab = convert_input(img, label, n_landmarks, im_size, lm_count)
-    pred = model(inp)
+    inp, lab = convert_input(img, label, n_landmarks, lm_count)
+    if test_mode:
+        pred = model.pred_test(inp)
+    else:
+        pred = model(inp)
 
     loss = tf.map_fn(lambda x: ssd_loss(x[0], x[1]), (lab, pred), dtype=tf.float32)
 
     lab = tf.expand_dims(tf.reshape(tf.transpose(lab, [0,2,1,3,4]), [-1, args.batch_size, im_size[0], im_size[1]]), axis=2)
-    pred = tf.expand_dims(tf.reshape(tf.transpose(pred, [0,2,1,3,4]), [-1, args.batch_size, im_size[0], im_size[1]]), axis=2)
-
-    # lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[1]])
-    # pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[1]])
+    pred = tf.expand_dims(tf.reshape(tf.transpose(pred, [0,2,1,3,4]), [-1, args.batch_size, im_size[0], im_size[1]]), axis=2) # 40,2,1,256,256
 
     c_dist = coord_dist(lab, pred)
     within_margin, closest_to_gt = per_kp_stats_iter(lab, pred, kp_margin)
@@ -159,8 +157,7 @@ def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_si
     img = img.numpy().squeeze() #np.sum(lab.numpy().squeeze(), axis=0)#
     if len(img.shape)<3: # for batcH_size = 1
         img = np.expand_dims(img,axis=0)
-    #lab = tf.transpose(lab,[0,1,2,4,3]) #TODO this is the issue: 
-    lab_print = np.sum(lab.numpy().squeeze(), axis=0, keepdims=True)
+    pred_logits = np.sum(pred.numpy().squeeze(), axis=0)
 
     pred_keypoints = pred_keypoints.numpy()
     lab_keypoints = lab_keypoints.numpy()
@@ -168,15 +165,17 @@ def store_results_iter(img, label, model, fn, path, lm_count, n_landmarks, im_si
         os.makedirs(path+'\\samples\\')
     for i in range(img.shape[0]):
         # vis_points(img[i], pred_keypoints[i], 3, None)
-        vis_points(lab_print[i], pred_keypoints[i], 3, None)
+        vis_points(img[i], pred_keypoints[i], 3, None)
         
         plt.savefig(path+'\\samples\\'+filenames[i]+'_pred.png')
         vis_points(img[i], lab_keypoints[i], 3, None)
         plt.savefig(path+'\\samples\\'+filenames[i]+'_gt.png')
+        plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
+        plt.savefig(path+'\\samples\\'+filenames[i]+'_pred_logits.png')
     return [loss], [c_dist], within_margin, closest_to_gt
     
 @tf.function
-def convert_input(img, lab, lm, im_size, lm_count):
+def convert_input(img, lab, lm, lm_count):
     ep_lab_0 = tf.fill(tf.shape(lab[:,0:lm_count,:,:]), -1e-4)
     # ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
     img = tf.expand_dims(tf.repeat(img, lm//lm_count, axis=1), axis=2)
@@ -225,13 +224,18 @@ def test_pipeline(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_s
         img, lab, fn = next(train)
         store_results_iter(img, lab, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size, kp_margin)
 
+def store_parameters():
+    pass
 
 def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     '''
     Try a curriculum kind of approach, where we iteratively learn a landmark and then the next, with the solution of the last as input.
     lm_count: how many landmarks at once
     '''
-    
+    if run_number is not None:
+        pass
+    else:
+        store_parameters()#TODO insert all
     
     kp_margin = tf.constant(kp_metric_margin, dtype=tf.int32)
     dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct, n_aug_rounds=10)
@@ -247,19 +251,9 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
 
-    lr_schedule = ExponentialCyclicalLearningRate(
-            initial_learning_rate=1e-4,
-            maximal_learning_rate=1e-2,
-            step_size=200,
-            scale_mode="cycle",
-            gamma=0.96,
-            name="exp_cyclic_scheduler")
+    lr_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=args.learning_rate, decay_steps=500, decay_rate=.9)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_decay, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
 
-    lr_schedule_2 = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=args.learning_rate, decay_steps=500, decay_rate=.9)
-
-    # optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule_2, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-    # optimizer = tf.keras.optimizers.SGD(learning_rate=args.learning_rate, momentum=.9)
     train = iter(dataset.train_data)
     val = iter(dataset.val_data)
     test = iter(dataset.test_data)
@@ -277,12 +271,9 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     start_time = time.time()
     for step in range(start_steps, args.num_training_iterations+1):
         img, lab, _ = next(train) 
-        inp, lab = convert_input(img, lab, dataset.n_landmarks, im_size, lm_count)
+        inp, lab = convert_input(img, lab, dataset.n_landmarks, lm_count)
         with tf.GradientTape() as tape:
             pred = unet_model(inp)
-            # TODO Fix this
-
-            # loss = ssd_loss(lab, pred) # loss for first lm_count landmarks
             loss = ssd_loss(lab, pred)
             grad = tape.gradient(loss, unet_model.trainable_weights)
             clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
@@ -304,7 +295,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
                 mrg = []
                 cgt = []
                 img_v, lab_v, _ = next(val)
-                inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, im_size, lm_count)
+                inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, lm_count)
                 
                 pred_v = unet_model(inp_v) # (lm, batch, C, H, W)
                 val_loss.append(ssd_loss(lab_v, pred_v))
@@ -386,8 +377,6 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     test_cgt = []
     for _ in range(args.num_test_samples):
         img_t, lab_t, fn = next(test) # img: 1,1,64,64 , lab: 1,40,64,64
-        # img_t = tf.expand_dims(img_t, axis=0)
-        # lab_t = tf.expand_dims(lab_t, axis=0)
         loss_t, c_dist_t, mrg_t, cgt_t = store_results_iter(img_t, lab_t, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size, kp_margin)
         test_loss.append(loss_t)
         test_c_dist.append(c_dist_t)

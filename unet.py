@@ -34,8 +34,28 @@ class unet2d(tf.keras.Model):
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh)
 
     def call(self, inputs):
-        states = []
+        states = self.setup_states()
         out = []
+        for i in range(self.seq_len):
+            unet_2d, states = self.unet_rec(inputs[i], states)
+            res = self.logits(unet_2d) # TODO payer et al do no activation ?
+            out.append(res)
+        return tf.stack(out, axis=0)
+
+    def pred_test(self, inputs):
+        states = self.setup_states()
+        out = []
+        lab = inputs[0,:,1:,:,:]
+        img = inputs[0,:,:1,:,:]
+        for _ in range(self.seq_len):
+            unet_2d, states = self.unet_rec(tf.concat([img,lab], axis=1), states)
+            res = self.logits(unet_2d) # TODO payer et al do no activation ?
+            out.append(res)
+            lab = res
+        return tf.stack(out, axis=0)
+
+    def setup_states(self):
+        states = []
         _unet = self.unet_rec
         while _unet is not None:
             if _unet.ntm_enc_dec is not None:
@@ -43,12 +63,7 @@ class unet2d(tf.keras.Model):
             else:
                 states = [*states, tf.constant(0.)]
             _unet = _unet.unet_rec
-        # states = tf.nest.flatten(states)
-        for i in range(self.seq_len):
-            unet_2d, states = self.unet_rec(inputs[i], states)
-            res = self.logits(unet_2d) # TODO payer et al do no activation ?
-            out.append(res)
-        return tf.stack(out, axis=0)
+        return states
 
 
 
