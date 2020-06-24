@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 import random
+import json
 
 import numpy as np
 import tensorflow as tf
@@ -17,9 +18,11 @@ from ntm_configs import CONF_POS_LIST, CONF_MEM_LIST
 
 parser = argparse.ArgumentParser()
 
+strategy = tf.distribute.MirroredStrategy()
+# tf.config.experimental_run_functions_eagerly(True)
 physical_devices = tf.config.list_physical_devices('GPU')
 try:
-  tf.config.experimental.set_memory_growth(physical_devices[0], True)
+  [tf.config.experimental.set_memory_growth(i, True) for i in physical_devices]
 except:
   # Invalid device or cannot modify virtual devices once initialized.
   pass
@@ -43,7 +46,7 @@ parser.add_argument('--checkpoint_interval', type=int, default=500,
                         help='Checkpointing step interval.')
 
 args = parser.parse_args()
-tf.config.experimental_run_functions_eagerly(True)
+
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = image.copy() # h,w
@@ -224,35 +227,81 @@ def test_pipeline(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_s
         img, lab, fn = next(train)
         store_results_iter(img, lab, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size, kp_margin)
 
-def store_parameters():
+def store_parameters(data_config, opti_config, unet_config, ntm_config, training_params, log_path):
+    params = {"data_config":data_config,
+              "opti_config":opti_config,
+              "unet_config":unet_config,
+              "ntm_config":ntm_config,
+              "training_params":training_params
+             }
+    with open(os.path.join(log_path,'params.json'), 'w') as fp:
+        json.dump(params, fp, indent=4)
+    fp.close()
+
+# https://www.tensorflow.org/tutorials/distribute/custom_training see this
+def load_parameters(log_path):
+    with open(os.path.join(log_path,'params.json'), 'r') as fp:
+        params = json.load(fp)
+    return params["data_config"], params["opti_config"], params["unet_config"], params["ntm_config"], params["training_params"]
+
+def train_step(inp, lab): #TODO
+    # with gradient tape blabla
     pass
 
-def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_count, im_size=None, train_pct=80, val_pct=10, test_pct=10, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
+def val_step(): #TODO
+    pass
+
+def test_step(): # TODO
+    pass
+
+def distributed_train_step(inp,lab):
+    per_replica_loss = strategy.run(train_step, args=(inp,lab,))
+    return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
+
+def iterative_train_loop(path, data_config, opti_config, unet_config, ntm_config, training_params, run_number=None, start_steps=0):
     '''
     Try a curriculum kind of approach, where we iteratively learn a landmark and then the next, with the solution of the last as input.
     lm_count: how many landmarks at once
-    '''
-    if run_number is not None:
-        pass
-    else:
-        store_parameters()#TODO insert all
-    
-    kp_margin = tf.constant(kp_metric_margin, dtype=tf.int32)
-    dataset = data.Data_Loader(args.dataset, args.batch_size, train_pct=train_pct, val_pct=val_pct, test_pct=test_pct, n_aug_rounds=10)
-    dataset(im_size=im_size)
-    unet_model = unet.unet2d(num_filters, fmap_inc_factor, ds_factors, lm_count, seq_len=dataset.n_landmarks//lm_count, ntm_config=ntm_config, batch_size=args.batch_size)
+    '''    
     if start_steps > 0:
-        if start_steps % args.checkpoint_interval != 0:
-            start_steps = int(np.round(float(start_steps) / args.checkpoint_interval, 0) * args.checkpoint_interval)
+        if start_steps % training_params["checkpoint_interval"] != 0:
+            start_steps = int(np.round(float(start_steps) / training_params["checkpoint_interval"], 0) * training_params["checkpoint_interval"])
         log_path, cp_path, cp_dir = load_dir(path, run_number, start_steps)
         unet_model.load_weights(cp_dir)
+        data_config, opti_config, unet_config, ntm_config, training_params = load_parameters(log_path) #this now always overwrites any given params, TODO
     else:
         log_path, cp_path = create_dir(path)
     train_writer = tf.summary.create_file_writer(log_path+"\\train\\")
     val_writer = tf.summary.create_file_writer(log_path+"\\val\\")
+    
+    if run_number is None:
+        store_parameters(data_config, opti_config, unet_config, ntm_config, training_params, log_path)
 
-    lr_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=args.learning_rate, decay_steps=500, decay_rate=.9)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_decay, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
+    kp_margin = tf.constant(training_params["kp_metric_margin"], dtype=tf.int32)
+    dataset = data.Data_Loader(name=data_config['dataset'],
+                               batch_size=data_config["batch_size"],
+                               train_pct=data_config["train_pct"],
+                               val_pct=data_config["val_pct"],
+                               test_pct=data_config["test_pct"],
+                               n_aug_rounds=data_config["n_aug_rounds"],
+                               repeat=data_config["repeat"],
+                               prefetch=data_config["prefetch"])
+
+    dataset(im_size=data_config["im_size"])
+    unet_model = unet.unet2d(num_fmaps=unet_config["num_filters"],
+                             fmap_inc_factor=unet_config["fmap_inc_factor"],
+                             downsample_factors=unet_config["ds_factors"],
+                             num_landmarks=data_config["lm_count"],
+                             seq_len=dataset.n_landmarks//data_config["lm_count"],
+                             ntm_config=ntm_config,
+                             batch_size=data_config["batch_size"],
+                             im_size=data_config["im_size"]
+                             )
+
+    lr_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=opti_config["learning_rate"], decay_steps=opti_config["decay_steps"], decay_rate=opti_config["decay_rate"])
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr_decay, beta_1=opti_config["adam_beta_1"], beta_2=opti_config["adam_beta_2"], epsilon=opti_config["adam_epsilon"])
+
+    im_size = data_config["im_size"] # to save space...
 
     train = iter(dataset.train_data)
     val = iter(dataset.val_data)
@@ -269,9 +318,9 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
 
     tf.print("Starting train loop...")
     start_time = time.time()
-    for step in range(start_steps, args.num_training_iterations+1):
+    for step in range(start_steps, training_params["num_training_iterations"]+1):
         img, lab, _ = next(train) 
-        inp, lab = convert_input(img, lab, dataset.n_landmarks, lm_count)
+        inp, lab = convert_input(img, lab, dataset.n_landmarks, data_config["lm_count"])
         with tf.GradientTape() as tape:
             pred = unet_model(inp)
             loss = ssd_loss(lab, pred)
@@ -280,8 +329,8 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
             optimizer.apply_gradients(zip(clipped_grad, unet_model.trainable_weights))
 
 
-            lab = tf.reshape(lab, [-1, args.batch_size, 1, im_size[0], im_size[0]])
-            pred = tf.reshape(pred, [-1, args.batch_size, 1, im_size[0], im_size[0]])
+            lab = tf.reshape(lab, [-1, data_config["batch_size"], 1, im_size[0], im_size[0]])
+            pred = tf.reshape(pred, [-1, data_config["batch_size"], 1, im_size[0], im_size[0]])
             kp_loss = tf.map_fn(lambda y: ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) #TODO weird results on coord dist
             c_dist = tf.map_fn(lambda y: coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)
 
@@ -289,13 +338,13 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         train_loss_lm.append([kp_loss])
         train_coord_dist_lm.append([c_dist])
         
-        if step % args.report_interval == 0:
-            for _ in range(args.validation_steps):
+        if step % training_params["report_interval"] == 0:
+            for _ in range(training_params["validation_steps"]):
                 val_coord_dist = []
                 mrg = []
                 cgt = []
                 img_v, lab_v, _ = next(val)
-                inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, lm_count)
+                inp_v, lab_v = convert_input(img_v, lab_v, dataset.n_landmarks, data_config["lm_count"])
                 
                 pred_v = unet_model(inp_v) # (lm, batch, C, H, W)
                 val_loss.append(ssd_loss(lab_v, pred_v))
@@ -367,7 +416,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
         
       
         
-        if step % args.checkpoint_interval == 0:
+        if step % training_params["checkpoint_interval"] == 0:
             unet_model.save_weights(cp_path.format(step=step))
             print("saved cp-{:04d}".format(step))
     
@@ -375,9 +424,9 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     test_c_dist = []
     test_mrg = []
     test_cgt = []
-    for _ in range(args.num_test_samples):
+    for _ in range(training_params["num_test_samples"]):
         img_t, lab_t, fn = next(test) # img: 1,1,64,64 , lab: 1,40,64,64
-        loss_t, c_dist_t, mrg_t, cgt_t = store_results_iter(img_t, lab_t, unet_model, fn, log_path, lm_count, dataset.n_landmarks, im_size, kp_margin)
+        loss_t, c_dist_t, mrg_t, cgt_t = store_results_iter(img_t, lab_t, unet_model, fn, log_path, data_config["lm_count"], dataset.n_landmarks, im_size, kp_margin)
         test_loss.append(loss_t)
         test_c_dist.append(c_dist_t)
         test_mrg.append(mrg_t)
@@ -389,7 +438,7 @@ def iterative_train_loop(path, num_filters, fmap_inc_factor, ds_factors, lm_coun
     testtxt.close()
     
         
-
+# TODO rewrite this to match the iterative training -> maybe we first do the distribute because that changes a lot again
 def train_unet_custom(path, num_filters, fmap_inc_factor, ds_factors, im_size=None, train_pct=80, val_pct=10, test_pct=10, kp_list_in=None, ntm_config=None, run_number=None, start_steps=0, kp_metric_margin=3):
     assert im_size is not None, "Please provide an image size to which to rescale the input to"
     if kp_list_in == [0]:
@@ -504,8 +553,91 @@ def load_dir(path, run_number, step):
 
 
 if __name__ == "__main__":
+    '''
+    config explanation:
+    Config is stored and loaded as .json into a python dict
+
+    #### data_config
+    dataset: 'droso', str, (TODO maybe another dataset at some point), choose which dataset to run experiment o n
+    batch_size: 2, int8, batch size
+    im_size: [256,256], int tuple, resize images to this size
+    lm_count: 5, int8, how many landmarks to put into iterative learning task at each iteration
+    kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task
+    train_pct, 10  \\
+    val_pct,   10   | --- int from (0,100], sum cant be > 100, how much of the dataset is train, test, validation set.
+    test_pct,  10   /
+    repeat, true, bool, whether to repeat the dataset infinitely
+    prefetch, true, bool, whether to prefetch samples from the tf.data dataset
+    n_aug_rounds, 10, int8, How many altered versions of the train dataset to append, i.e. 10 = 10 transformed versions of the same dataset are appended to the original (also transformed) dataset
+
+    #### opti_config
+    learning_rate, 1e-3, float, optimizer (adam) learning rate
+    adam_beta_1, 0.9, float The exponential decay rate for the 1st moment estimates # TODO check whether this decays the learning rate
+    adam_beta_2,  0.999, float, The exponential decay rate for the 2nd moment estimates
+    adam_epsilon, 1e-7, float, A small constant for numerical stability 
+    decay_rate: .9, float, rate at which to decay # see: initial_learning_rate * decay_rate ^ (step / decay_steps)
+    decay_steps: 500, int, exponent to accelerate decay after x steps # ^ 
+
+    #### unet_config
+    num_filters, 16, int, number of filters on first layer of Unet
+    fmap_inc_factor, 2, int, multiplier on how much to increase number of filters at each level
+    ds_factors, [[2,2],[2,2],[2,2],[2,2],[2,2]], list of int tuples, defines depth of Unet, also defines how much is downsampled at each depth step
+
+    #### ntm_config
+    !! contains multiple configs, depending on how many ntm layers you want to include in the unet i.e. a ntm layer  !!
+    !! on first unet level is provided by feeding a dict with name = unet level {"0":{"enc_dec_param":{...}}}        !!
+    !! ntm_config further contains two sub-dictionaries: enc_dec_param, ntm_param                                    !!
+    
+        ###### end_dec_param, this is finnicky and needs to match the unet position
+        num_filters, 16, int,  number of conv filters at each layer
+        kernel_size, 3, int, conv_layer kernel size
+        pool_size, [4,4], list of int, defines number of encoder decoder layers and how much is pooled
+    
+        ###### ntm_param, set to None if no NTM, just encoder-decoder architecture
+        controller_units, 256, int, number of units of controller dense layer, controller defines what and how to write and read
+        memory_size, 64, int, length of a single memory entry
+        memory_vector_dim, 256, int, number of memory entries
+        output_dim, 256, int, output dimensions of NTM, has to be square-rootable as it is reshaped to square format and then upsampled needs to match the Unet layer output
+        read_head_num, 3, int, number of simultaneous read heads
+        write_head_num, 3 int, number of simultaneous write heads
+    
+    #### training_params
+    num_training_iterations, 10000, int, number of training steps, for iterative approach this also means, number of samples put in (does not get reduced by multiple iterations over the same image)
+    validation_steps, 5, int, number of validations iterations over which metrics are averaged and reported
+    report_interval, 50, int, number of steps after which a validation step happens
+    kp_metric_margin, 3, int, pixel margin at which a kp is counted as close enough
+    checkpoint_interval, 500, int, number of steps at which a model checkpoints happens, -> can only be used to reuse model for predictions, not to resume training, because no way to ensure data consistency currently
+    num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
+    '''
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
-    standard_ntm_conf = {"0":{"enc_dec_param":{"num_filters":16,
+
+    data_config = {"dataset":'droso',
+                   "batch_size": 2,
+                   "im_size": [256,256],
+                   "lm_count": 5,
+                   "kp_list_in": None,
+                   "train_pct":10,
+                   "val_pct":10,
+                   "test_pct":10,
+                   "repeat":True,
+                   "prefetch":True,
+                   "n_aug_rounds":10
+                   }
+    
+    opti_config = {"learning_rate": 1e-3,
+                   "adam_beta_1": 0.9,
+                   "adam_beta_2": 0.999,
+                   "adam_epsilon": 1e-7,
+                   "decay_rate": .9, 
+                   "decay_steps": 500
+                   }
+    
+    unet_config = {"num_filters": 16,
+                   "fmap_inc_factor": 2,
+                   "ds_factors":[[2,2],[2,2],[2,2],[2,2],[2,2]]}
+
+
+    ntm_config = {"0":{"enc_dec_param":{"num_filters":16,
                                                "kernel_size":3,
                                                "pool_size":[4,4]},
                               "ntm_param":{"controller_units":256,
@@ -515,58 +647,15 @@ if __name__ == "__main__":
                                            "read_head_num":3,
                                            "write_head_num":3}}
                         }
-    standard_ed_conf = {"0":{"enc_dec_param":{"num_filters":64,
-                                               "kernel_size":3,
-                                               "pool_size":[4,4]},
-                              "ntm_param":None}
-                        }
+    
+    training_params = {"num_training_iterations": 1,
+                       "validation_steps": 5,
+                       "report_interval": 50,
+                       "kp_metric_margin": 3,
+                       "checkpoint_interval": 500,
+                       "num_test_samples": 5
+                       }
 
-    big_ntm_conf = {"0":{"enc_dec_param":{"num_filters":16,
-                                               "kernel_size":3,
-                                               "pool_size":[4,4]},
-                              "ntm_param":{"controller_units":512,
-                                           "memory_size":128,
-                                           "memory_vector_dim":512,
-                                           "output_dim":256,
-                                           "read_head_num":3,
-                                           "write_head_num":3}}
-                        }               
-    # conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
-    #                                            "kernel_size":3,
-    #                                            "pool_size":[4,2]},
-    #                           "ntm_param":{"controller_units":256,
-    #                                        "memory_size":64,
-    #                                        "memory_vector_dim":256,
-    #                                        "output_dim":64,
-    #                                        "read_head_num":2,
-    #                                        "write_head_num":2}},
-    #         "2":{"enc_dec_param":{"num_filters":32,
-    #                                            "kernel_size":3,
-    #                                            "pool_size":[2,2]},
-    #                           "ntm_param":{"controller_units":256,
-    #                                        "memory_size":64,
-    #                                        "memory_vector_dim":256,
-    #                                        "output_dim":16,
-    #                                        "read_head_num":4,
-    #                                        "write_head_num":4}}}
-    conf_pos02={"0":{"enc_dec_param":{"num_filters":16,
-                                                "kernel_size":3,
-                                                "pool_size":[4,4]},
-                                "ntm_param":{"controller_units":256,
-                                            "memory_size":64,
-                                            "memory_vector_dim":256,
-                                            "output_dim":256,
-                                            "read_head_num":3,
-                                            "write_head_num":3}},
-                "2":{"enc_dec_param":{"num_filters":32,
-                                                "kernel_size":3,
-                                                "pool_size":[2,2]},
-                                "ntm_param":{"controller_units":256,
-                                            "memory_size":64,
-                                            "memory_vector_dim":256,
-                                            "output_dim":256,
-                                            "read_head_num":3,
-                                            "write_head_num":3}}}
 
     # List of experiments:
     # BIG TODO: check how long a training takes, adjust list of experiments accordingly
@@ -616,7 +705,7 @@ if __name__ == "__main__":
 
     # 4. Iterative learning approach: (5%) (unet, ntm)
     # 	- Iterative feed with solution in t+1
-    iterative_train_loop(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
+    iterative_train_loop(PATH, data_config=data_config, opti_config=opti_config, unet_config=unet_config, ntm_config=ntm_config, training_params=training_params)    # 	- batched, not batched
     # test_pipeline(PATH, num_filters=16, fmap_inc_factor=2, ds_factors=[[2,2],[2,2],[2,2],[2,2],[2,2]], lm_count=5, im_size=[256, 256], train_pct=10, val_pct=10, test_pct=10, ntm_config=standard_ntm_conf)    # 	- batched, not batched
 	
 

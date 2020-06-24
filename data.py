@@ -139,9 +139,9 @@ class Data_Loader():
 
         def generate_augmentations(images, keypoints, filename):
             regular_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment)
-            # for _ in range(10): 
-            #     aug_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment)
-            #     regular_ds.concatenate(aug_ds)
+            for _ in range(self.n_aug_rounds): 
+                aug_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment)
+                regular_ds.concatenate(aug_ds)
             return regular_ds
         
         return data.flat_map(generate_augmentations)
