@@ -63,7 +63,7 @@ class Train(object):
         closest_red = tf.argmin(tf.reduce_mean(closest, axis=-1), axis=1) # find min distance
         closest_to_nearest = tf.reduce_sum(tf.cast(tf.equal(tf.transpose(tf.cast(closest_red, tf.int32)), tf.range(tf.shape(closest_red)[0], dtype=tf.int32)), dtype=tf.float32), axis=0) * (1./self.global_batch_size)
         within_margin = tf.reduce_sum(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_pred_n, y_true_n))), axis=-1), tf.float32), axis=-1) * (1./self.global_batch_size) 
-        return within_margin, closest_to_nearest 
+        return within_margin*self.batch_div, closest_to_nearest*self.batch_div
     
     def get_max_indices_argmax(self, logits): # TODO correctly make use of H,W dimensions
         flat_logits = tf.reshape(logits, tf.concat([tf.shape(logits)[:-2], [-1]], axis=0))
@@ -86,6 +86,13 @@ class Train(object):
         lab = tf.transpose(lab, [1,0,2,3,4])
         return inp, lab
 
+    def kp_loss_c_dist(self, lab, pred):
+        lab = tf.expand_dims(tf.reshape(tf.transpose(lab, [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
+        pred = tf.expand_dims(tf.reshape(tf.transpose(pred, [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
+        kp_loss = tf.map_fn(lambda y: self.dist_ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) # batch_div is already applied in loss_fn
+        c_dist = tf.map_fn(lambda y: self.dist_coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)*self.batch_div
+        return lab, pred, kp_loss, c_dist
+
     def train_step(self, inp, lab): #TODO
         with tf.GradientTape() as tape:
             pred = self.model(inp)
@@ -93,38 +100,25 @@ class Train(object):
         grad = tape.gradient(loss, self.model.trainable_weights)
         clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
         self.optimizer.apply_gradients(zip(clipped_grad, self.model.trainable_weights))
-
-        lab = tf.reshape(lab, [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, 1, self.im_size[0], self.im_size[0]])
-        pred = tf.reshape(pred, [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, 1, self.im_size[0], self.im_size[0]])
-        kp_loss = tf.map_fn(lambda y: self.dist_ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) 
-        c_dist = tf.map_fn(lambda y: self.dist_coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)*self.batch_div
+        _, _, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         return loss, kp_loss, c_dist
 
     def val_step(self, inp, lab):
         pred = self.model(inp)
         loss = self.compute_loss(lab, pred)
-
-        lab = tf.reshape(lab, [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, 1, self.im_size[0], self.im_size[0]])
-        pred = tf.reshape(pred, [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, 1, self.im_size[0], self.im_size[0]])
-        kp_loss = tf.map_fn(lambda y: self.dist_ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) 
-        c_dist = tf.map_fn(lambda y: self.dist_coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)*self.batch_div
+        lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
-        return  loss, kp_loss, c_dist, within_margin*self.batch_div, closest_to_gt*self.batch_div
+        return  loss, kp_loss, c_dist, within_margin, closest_to_gt
 
     def test_step(self, inp, lab, fn):
         img = inp[0,:,:1,:,:]
         filenames = [i.decode('UTF-8') for i in fn.numpy()]
         pred = self.model.pred_test(inp)
-
         loss = self.compute_loss(lab, pred)
-
-        lab = tf.reshape(lab, [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, 1, self.im_size[0], self.im_size[0]]) # TODO this might be wrong, because reshape works in mysterious ways
-        pred = tf.reshape(pred, [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, 1, self.im_size[0], self.im_size[0]])
-        kp_loss = tf.map_fn(lambda y: self.dist_ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) 
-        c_dist = tf.map_fn(lambda y: self.dist_coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)*self.batch_div
+        lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
         self.store_samples(img, pred, lab, filenames)
-        return loss, kp_loss, c_dist, within_margin*self.batch_div, closest_to_gt*self.batch_div
+        return loss, kp_loss, c_dist, within_margin, closest_to_gt
 
     def store_samples(self, img, pred, lab, filenames):
         pred_keypoints = tf.transpose(self.get_max_indices_argmax(pred), [1,0,2])
@@ -147,17 +141,19 @@ class Train(object):
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
             plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_pred_logits.png')
     
-    def distributed_train_step(self,inp,lab):
+    @tf.function
+    def distributed_train_step(self, inp, lab):
         per_replica_loss, pr_kp_loss, pr_c_dist = self.strategy.experimental_run_v2(self.train_step, args=(inp, lab,))
-        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=0), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=0)
+        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None)
 
+    @tf.function
     def distributed_val_step(self, inp, lab):
         pr_loss, pr_kp_loss, pr_c_dist, pr_wm, pr_ctgt = self.strategy.experimental_run_v2(self.val_step, args=(inp, lab,))
-        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=0),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=0),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=0),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=0)
+        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=None)
     
     def distributed_test_step(self, inp, lab, fn):
         pr_loss, pr_kp_loss, pr_c_dist, pr_wm, pr_ctgt = self.strategy.experimental_run_v2(self.test_step, args=(inp, lab, fn, ))
-        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=0),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=0),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=0),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=0)
+        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=None)
 
     def val_store(self, step, elapsed_time, t_mean, tl_mean, tcd_mean, v_mean, vl_mean, vcd_mean, mrg_mean, cgt_mean):
         tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
@@ -371,7 +367,7 @@ def main(path, data_config, opti_config, unet_config, ntm_config, training_param
         trainer.iter_loop(train=train_data, val=val_data, test=test_data, n_landmarks=dataset.n_landmarks, start_steps=start_steps)
 
 if __name__ == "__main__":
-        '''
+    '''
     config explanation:
     Config is stored and loaded as .json into a python dict
 
@@ -466,7 +462,7 @@ if __name__ == "__main__":
                                            "write_head_num":3}}
                         }
     
-    training_params = {"num_training_iterations": 1,
+    training_params = {"num_training_iterations": 100,
                        "validation_steps": 5,
                        "report_interval": 50,
                        "kp_metric_margin": 3,
