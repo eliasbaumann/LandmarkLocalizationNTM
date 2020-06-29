@@ -70,7 +70,7 @@ class Data_Loader():
             self.val_data = self.val_data.repeat()
             self.test_data = self.test_data.repeat()
         
-        self.train_data = self.train_data.batch(self.batch_size, drop_remainder = True)
+        self.train_data = self.train_data.batch(self.batch_size, drop_remainder=True)
         self.val_data = self.val_data.batch(self.batch_size, drop_remainder=True)
         self.test_data = self.test_data.batch(self.batch_size, drop_remainder=True)
 
@@ -94,6 +94,8 @@ class Data_Loader():
             keypoints = generate_heatmaps(lab, imx, self.n_landmarks)
             resized = tf.image.resize(img, [imx,imx]) #TODO correct axis
             resized = tf.transpose(resized, perm=[2,0,1]) # convert to channels first
+            resized.set_shape([1,imx,imx])
+            keypoints.set_shape([40,imx,imx])
             return resized, keypoints, fn
 
         def convert_all(images, keypoints, filename):
