@@ -40,6 +40,7 @@ class Train(object):
         self.training_params = training_params
         self.log_path = log_path
         self.cp_path = cp_path
+        self.iter = True if training_params["mode"]=="iter" else False
 
     def dist_ssd_loss(self, gt_labels, logits):
         return tf.reduce_sum(tf.square(gt_labels-logits), axis=None)
@@ -73,7 +74,11 @@ class Train(object):
         res =  tf.concat((w,h), axis=-1)
         return res
 
-    def convert_input(self, img, lab, lm, lm_count):
+    def convert_input(self, img, lab, lm, lm_count, iter):
+        if not self.iter:
+            inp = tf.expand_dims(img, axis=0)
+            lab = tf.expand_dims(lab, axis=0)
+            return inp, lab
         ep_lab_0 = tf.fill(tf.shape(lab[:,0:lm_count,:,:]), -1e-4)
         # ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
         img = tf.expand_dims(tf.repeat(img, lm//lm_count, axis=1), axis=2)
@@ -82,7 +87,7 @@ class Train(object):
         inp = tf.concat([img, ep_lab], axis=2)
         lab = tf.split(lab, lm//lm_count, axis=1)
         lab = tf.stack(lab, axis=1)
-        inp = tf.transpose(inp, [1,0,2,3,4]) #TODO what is the output shape then (Seq, batch, C , H, W?)
+        inp = tf.transpose(inp, [1,0,2,3,4]) # Seq, Batch, C, H, W
         lab = tf.transpose(lab, [1,0,2,3,4])
         return inp, lab
 
@@ -205,8 +210,9 @@ class Train(object):
         tf.print("Starting train loop...")
         start_time = time.time()
         for step in range(start_steps, self.training_params["num_training_iterations"]+1):
-            img, lab, _ = next(train) 
-            inp, lab = self.convert_input(img, lab, n_landmarks, self.data_config["lm_count"])
+            img, lab, _ = next(train)
+            inp, lab = self.convert_input(img, lab, n_landmarks, self.data_config["lm_count"], self.iter) # TODO how does this behave when non iter
+
             loss, kp_loss, c_dist = self.distributed_train_step(inp, lab)
             
             train_loss.append(loss)
@@ -216,7 +222,7 @@ class Train(object):
             if step % training_params["report_interval"] == 0:
                 for _ in range(training_params["validation_steps"]):
                     img_v, lab_v, _ = next(val)
-                    inp_v, lab_v = self.convert_input(img_v, lab_v, n_landmarks, data_config["lm_count"])
+                    inp_v, lab_v = self.convert_input(img_v, lab_v, n_landmarks, data_config["lm_count"], self.iter)
                     v_loss, v_kp_loss, v_c_dist, v_within_margin, v_closest_to_gt = self.distributed_val_step(inp_v, lab_v)
 
                     mrg_lm.append(v_within_margin)
@@ -254,14 +260,14 @@ class Train(object):
                 self.model.save_weights(self.cp_path.format(step=step))
                 print("saved cp-{:04d}".format(step))
         
-        test_loss = []
+        test_loss = [] # TODO : fix test for simul loop variant, fix loss for simul loop variant (high value in beginning ? )
         test_kp_loss = []
         test_c_dist = []
         test_mrg = []
         test_cgt = []
         for _ in range(training_params["num_test_samples"]):
             img_t, lab_t, fn = next(test)
-            inp_t, lab_t = self.convert_input(img_t, lab_t, n_landmarks, data_config["lm_count"])
+            inp_t, lab_t = self.convert_input(img_t, lab_t, n_landmarks, data_config["lm_count"], self.iter)
             t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(inp_t, lab_t, fn)
             test_loss.append(t_loss)
             test_kp_loss.append([t_kp_loss])
@@ -330,10 +336,18 @@ def main(path, data_config, opti_config, unet_config, ntm_config, training_param
                                repeat=data_config["repeat"],
                                prefetch=data_config["prefetch"])
 
-    dataset(im_size=data_config["im_size"])
-    
-    cp_dir = None
+    dataset(im_size=data_config["im_size"], keypoints=data_config["kp_list_in"])
+    if training_params["mode"] == "iter":
+        seq_len = dataset.n_landmarks//data_config["lm_count"]
+        num_landmarks = data_config["lm_count"]
+    elif training_params["mode"] == "simul":
+        seq_len = 1
+        len_kp = (len(data_config["kp_list_in"])-1) if data_config["kp_list_in"] is not None else 0
+        num_landmarks = dataset.n_landmarks - len_kp
+    else:
+        raise ValueError("training_params[\"mode\"] must be either iter or simul")
 
+    cp_dir = None
     if start_steps > 0:
         if start_steps % training_params["checkpoint_interval"] != 0:
             start_steps = int(np.round(float(start_steps) / training_params["checkpoint_interval"], 0) * training_params["checkpoint_interval"])
@@ -349,8 +363,8 @@ def main(path, data_config, opti_config, unet_config, ntm_config, training_param
         model = unet.unet2d(num_fmaps=unet_config["num_filters"],
                                  fmap_inc_factor=unet_config["fmap_inc_factor"],
                                  downsample_factors=unet_config["ds_factors"],
-                                 num_landmarks=data_config["lm_count"],
-                                 seq_len=dataset.n_landmarks//data_config["lm_count"],
+                                 num_landmarks=num_landmarks,
+                                 seq_len=seq_len,
                                  ntm_config=ntm_config,
                                  batch_size=data_config["batch_size"],
                                  im_size=data_config["im_size"]
@@ -373,10 +387,10 @@ if __name__ == "__main__":
 
     #### data_config
     dataset: 'droso', str, (TODO maybe another dataset at some point), choose which dataset to run experiment o n
-    batch_size: 2, int8, batch size
+    batch_size: 2, int8, batch size, needs to be divisible by number of GPUs -> batch_size = GLOBAL_BATCH_SIZE
     im_size: [256,256], int tuple, resize images to this size
-    lm_count: 5, int8, how many landmarks to put into iterative learning task at each iteration
-    kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task
+    lm_count: 5, int8, how many landmarks to put does output layer predict (used for iterative and non iterative loop)
+    kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task, None or [0] for no input kps -> this is only for non iterative loop
     train_pct, 10  \\
     val_pct,   10   | --- int from (0,100], sum cant be > 100, how much of the dataset is train, test, validation set.
     test_pct,  10   /
@@ -422,6 +436,7 @@ if __name__ == "__main__":
     kp_metric_margin, 3, int, pixel margin at which a kp is counted as close enough
     checkpoint_interval, 500, int, number of steps at which a model checkpoints happens, -> can only be used to reuse model for predictions, not to resume training, because no way to ensure data consistency currently
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
+    mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously
     '''
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
 
@@ -429,7 +444,7 @@ if __name__ == "__main__":
                    "batch_size": 2,
                    "im_size": [256,256],
                    "lm_count": 5,
-                   "kp_list_in": None,
+                   "kp_list_in": [1,2,3],
                    "train_pct":10,
                    "val_pct":10,
                    "test_pct":10,
@@ -467,7 +482,8 @@ if __name__ == "__main__":
                        "report_interval": 50,
                        "kp_metric_margin": 3,
                        "checkpoint_interval": 500,
-                       "num_test_samples": 5
+                       "num_test_samples": 5,
+                       "mode": "simul"
                        }
 
     main(PATH, data_config, opti_config, unet_config, ntm_config, training_params)
