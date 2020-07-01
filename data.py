@@ -63,7 +63,7 @@ class Data_Loader():
         self.train_data = self.augment_data(self.train_data, imx, imy)
 
         if self.keypoints is not None:
-            self.train_data, self.val_data, self.test_dataself = self.kp_to_input(self.train_data, self.val_data, self.test_data, self.keypoints)
+            self.train_data, self.val_data, self.test_data = self.kp_to_input(self.train_data, self.val_data, self.test_data, self.keypoints)
         
         if self.repeat:
             self.train_data = self.train_data.repeat()
