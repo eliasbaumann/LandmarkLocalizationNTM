@@ -356,7 +356,8 @@ def main(path, data_config, opti_config, unet_config, ntm_config, training_param
                                test_pct=data_config["test_pct"],
                                n_aug_rounds=data_config["n_aug_rounds"],
                                repeat=data_config["repeat"],
-                               prefetch=data_config["prefetch"])
+                               prefetch=data_config["prefetch"],
+                               sigma=data_config["sigma"])
 
     dataset(im_size=data_config["im_size"], keypoints=data_config["kp_list_in"])
     if training_params["mode"] == "iter":
@@ -411,6 +412,7 @@ if __name__ == "__main__":
     dataset: 'droso', str, (TODO maybe another dataset at some point), choose which dataset to run experiment o n
     batch_size: 2, int8, batch size, needs to be divisible by number of GPUs -> batch_size = GLOBAL_BATCH_SIZE
     im_size: [256,256], int tuple, resize images to this size
+    sigma: 1., float, size of gaussian blob on heatmap
     lm_count: 5, int8, how many landmarks to put does output layer predict (used for iterative and non iterative loop) #TODO is this true?
     kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task, None or [0] for no input kps -> this is only for non iterative loop
     train_pct, 10  \\
@@ -465,6 +467,7 @@ if __name__ == "__main__":
     data_config = {"dataset":'droso',
                    "batch_size": 2,
                    "im_size": [256,256],
+                   "sigma": 1.,
                    "lm_count": 5,
                    "kp_list_in": None,
                    "train_pct":10,
@@ -502,7 +505,7 @@ if __name__ == "__main__":
     training_params = {"num_training_iterations": 10000,
                        "validation_steps": 5,
                        "report_interval": 100,
-                       "kp_metric_margin": 3,
+                       "kp_metric_margin": 2,
                        "checkpoint_interval": 1000,
                        "num_test_samples": 10,
                        "mode": "iter"

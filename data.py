@@ -20,7 +20,7 @@ def decode_image(file_path):
     return img
 
 class Data_Loader():
-    def __init__(self, name, batch_size, train_pct=80, val_pct=10, test_pct=10, repeat=True, prefetch=True, n_aug_rounds=5):
+    def __init__(self, name, batch_size, train_pct=80, val_pct=10, test_pct=10, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
         self.name = name
         self.batch_size = batch_size
         self.train_pct = train_pct
@@ -29,6 +29,7 @@ class Data_Loader():
         self.repeat = repeat
         self.prefetch = prefetch
         self.n_aug_rounds = n_aug_rounds
+        self.sigma = sigma
         self.train_data = None
         self.val_data = None
         self.test_data = None
@@ -91,7 +92,7 @@ class Data_Loader():
         @tf.function
         def _tf_resize(img, lab, fn):
             lab = _rescale_lab(lab, imx, imx)
-            keypoints = generate_heatmaps(lab, imx, self.n_landmarks)
+            keypoints = generate_heatmaps(lab, imx, self.n_landmarks, self.sigma)
             resized = tf.image.resize(img, [imx,imx]) #TODO correct axis
             resized = tf.transpose(resized, perm=[2,0,1]) # convert to channels first
             resized.set_shape([1,imx,imx])
