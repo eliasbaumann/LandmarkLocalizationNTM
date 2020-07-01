@@ -606,7 +606,7 @@ if __name__ == "__main__":
     batch_size: 2, int8, batch size
     im_size: [256,256], int tuple, resize images to this size
     lm_count: 5, int8, how many landmarks to put into iterative learning task at each iteration
-    kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task
+    kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task (i believe it starts at 1, 0=image itself, None works for image itself as well)
     train_pct, 10  \\
     val_pct,   10   | --- int from (0,100], sum cant be > 100, how much of the dataset is train, test, validation set.
     test_pct,  10   /
