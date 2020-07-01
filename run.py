@@ -62,8 +62,8 @@ class Train(object):
         exp_y_true = tf.expand_dims(y_true_n, 1)
         closest = tf.square(tf.subtract(exp_y_pred, exp_y_true)) # using TF broadcast to create distance table
         closest_red = tf.argmin(tf.reduce_mean(closest, axis=-1), axis=1) # find min distance
-        closest_to_nearest = tf.reduce_sum(tf.cast(tf.equal(tf.transpose(tf.cast(closest_red, tf.int32)), tf.range(tf.shape(closest_red)[0], dtype=tf.int32)), dtype=tf.float32), axis=0) * (1./self.global_batch_size)
-        within_margin = tf.reduce_sum(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_pred_n, y_true_n))), axis=-1), tf.float32), axis=-1) * (1./self.global_batch_size) 
+        closest_to_nearest = tf.reduce_sum(tf.cast(tf.equal(tf.transpose(tf.cast(closest_red, tf.int32)), tf.range(tf.shape(closest_red)[0], dtype=tf.int32)), dtype=tf.float32), axis=0) 
+        within_margin = tf.reduce_sum(tf.cast(tf.reduce_all(tf.greater_equal(margin, tf.abs(tf.subtract(y_pred_n, y_true_n))), axis=-1), tf.float32), axis=-1) 
         return within_margin*self.batch_div, closest_to_nearest*self.batch_div
     
     def get_max_indices_argmax(self, logits): # TODO correctly make use of H,W dimensions
@@ -100,7 +100,7 @@ class Train(object):
 
     def train_step(self, inp, lab): #TODO
         with tf.GradientTape() as tape:
-            pred = self.model(inp)
+            pred, _ = self.model(inp)
             loss = self.compute_loss(lab, pred)
         grad = tape.gradient(loss, self.model.trainable_weights)
         clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
@@ -109,21 +109,11 @@ class Train(object):
         return loss, kp_loss, c_dist
 
     def val_step(self, inp, lab):
-        pred = self.model(inp)
+        pred, _ = self.model(inp)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
         return  loss, kp_loss, c_dist, within_margin, closest_to_gt
-
-    # def test_step_iter(self, inp, lab, fn):
-    #     img = inp[0,:,:1,:,:]
-    #     filenames = [i.decode('UTF-8') for i in fn.numpy()]
-    #     pred = self.model.pred_test(inp)
-    #     loss = self.compute_loss(lab, pred)
-    #     lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
-    #     within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
-    #     self.store_samples(img, pred, lab, filenames)
-    #     return loss, kp_loss, c_dist, within_margin, closest_to_gt
     
     def test_step(self, inp, lab, fn):
         img = inp[0,:,:1,:,:]
@@ -132,14 +122,14 @@ class Train(object):
             given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
         else:
             given_kp = None
-        pred = self.model.pred_test(inp) if self.iter else self.model(inp)
+        pred, states = self.model.pred_test(inp) if self.iter else self.model(inp)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
-        self.store_samples(img, pred, lab, filenames, given_kp)
+        self.store_samples(img, pred, lab, filenames, given_kp, states)
         return loss, kp_loss, c_dist, within_margin, closest_to_gt
 
-    def store_samples(self, img, pred, lab, filenames, given_kp = None):
+    def store_samples(self, img, pred, lab, filenames, given_kp = None, states=None):
         pred_keypoints = tf.transpose(self.get_max_indices_argmax(pred), [1,0,2])
         lab_keypoints = tf.transpose(self.get_max_indices_argmax(lab), [1,0,2])
         
@@ -156,16 +146,28 @@ class Train(object):
             given_kp = tf.transpose(self.get_max_indices_argmax(given_kp), [1,0,2]).numpy()
         else:
             given_kp = np.repeat(None, img.shape[0])
-        for i in range(img.shape[0]):                
+        for i in range(img.shape[0]): # per batch iteration                
             vis_points(img[i], pred_keypoints[i], 3, given_kp=given_kp[i])
             plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_pred.png')
             vis_points(img[i], lab_keypoints[i], 3, given_kp=given_kp[i])
             plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_gt.png')
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
             plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_pred_logits.png')
+            self.store_mem(states, filenames[i], i)
 
-        
-    
+    def store_mem(self, states, fn, batch_no):
+        if states is None:
+            return
+        keys = list(map(int, self.model.ntm_config.keys()))
+        os.makedirs(self.log_path+'\\samples\\'+fn)
+        count = 0
+        for state in states:
+            for key in keys:
+                M = state[key]['M'][batch_no].numpy()
+                plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
+                plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+str(count)+'mem.png')
+            count += 1
+
     @tf.function
     def distributed_train_step(self, inp, lab):
         per_replica_loss, pr_kp_loss, pr_c_dist = self.strategy.experimental_run_v2(self.train_step, args=(inp, lab,))
@@ -409,7 +411,7 @@ if __name__ == "__main__":
     dataset: 'droso', str, (TODO maybe another dataset at some point), choose which dataset to run experiment o n
     batch_size: 2, int8, batch size, needs to be divisible by number of GPUs -> batch_size = GLOBAL_BATCH_SIZE
     im_size: [256,256], int tuple, resize images to this size
-    lm_count: 5, int8, how many landmarks to put does output layer predict (used for iterative and non iterative loop)
+    lm_count: 5, int8, how many landmarks to put does output layer predict (used for iterative and non iterative loop) #TODO is this true?
     kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task, None or [0] for no input kps -> this is only for non iterative loop
     train_pct, 10  \\
     val_pct,   10   | --- int from (0,100], sum cant be > 100, how much of the dataset is train, test, validation set.
@@ -464,7 +466,7 @@ if __name__ == "__main__":
                    "batch_size": 2,
                    "im_size": [256,256],
                    "lm_count": 5,
-                   "kp_list_in": [0,1,2],
+                   "kp_list_in": None,
                    "train_pct":10,
                    "val_pct":10,
                    "test_pct":10,
@@ -497,13 +499,13 @@ if __name__ == "__main__":
                                            "write_head_num":3}}
                         }
     
-    training_params = {"num_training_iterations": 1,
+    training_params = {"num_training_iterations": 10000,
                        "validation_steps": 5,
-                       "report_interval": 50,
+                       "report_interval": 100,
                        "kp_metric_margin": 3,
-                       "checkpoint_interval": 500,
-                       "num_test_samples": 5,
-                       "mode": "simul"
+                       "checkpoint_interval": 1000,
+                       "num_test_samples": 10,
+                       "mode": "iter"
                        }
 
     main(PATH, data_config, opti_config, unet_config, ntm_config, training_params)
