@@ -36,23 +36,27 @@ class unet2d(tf.keras.Model):
     def call(self, inputs):
         states = self.setup_states()
         out = []
+        mem_out = []
         for i in range(self.seq_len):
             unet_2d, states = self.unet_rec(inputs[i], states)
-            res = self.logits(unet_2d) # TODO payer et al do no activation ?
+            res = self.logits(unet_2d) 
             out.append(res)
-        return tf.stack(out, axis=0)
+            mem_out.append(states)
+        return tf.stack(out, axis=0), mem_out
 
     def pred_test(self, inputs):
         states = self.setup_states()
         out = []
+        mem_out = []
         lab = inputs[0,:,1:,:,:]
         img = inputs[0,:,:1,:,:]
         for _ in range(self.seq_len):
             unet_2d, states = self.unet_rec(tf.concat([img,lab], axis=1), states)
-            res = self.logits(unet_2d) # TODO payer et al do no activation ?
+            res = self.logits(unet_2d) 
             out.append(res)
+            mem_out.append(states)
             lab = res
-        return tf.stack(out, axis=0)
+        return tf.stack(out, axis=0), mem_out
 
     def setup_states(self):
         states = []
