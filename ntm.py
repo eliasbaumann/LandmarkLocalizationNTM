@@ -32,8 +32,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.batch_size = batch_size
         self.layer = layer
 
-        self._ds = tf.keras.layers.MaxPooling2D(pool_size=(8,8), name='ntm_pool2d')
-
         self._controller = tf.keras.layers.LSTMCell(units=self.controller_units)
 
         self.num_params_per_head = self.memory_vector_dim + 1 + 1 + (self.shift_range * 2 + 1) + 1
@@ -138,7 +136,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         g = tf.expand_dims(g, axis=1)
         w_g = g * w_c + (1 - g) * prev_w
 
-        # TODO i literally do not know whats happening here, we create the shift matrix i guess
         s = tf.concat([s[:, :self.shift_range + 1],
                        tf.zeros([s.get_shape()[0], self.memory_size - (self.shift_range * 2 + 1)]),
                        s[:, -self.shift_range:]], axis=1, name='concat_adressing_%d_1' % self.layer)
