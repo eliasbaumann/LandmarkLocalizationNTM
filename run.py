@@ -75,6 +75,7 @@ class Train(object):
         return res
 
     def convert_input(self, img, lab, lm, lm_count, iter):
+        # TODO add padding to 20 landmarks for cephal
         if not self.iter:
             inp = tf.expand_dims(img, axis=0)
             lab = tf.expand_dims(lab, axis=0)
@@ -164,6 +165,7 @@ class Train(object):
         for state in states:
             for key in keys:
                 M = state[key]['M'][batch_no].numpy()
+                M = (M+1)/2.
                 plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
                 plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+str(count)+'mem.png')
             count += 1
@@ -184,7 +186,7 @@ class Train(object):
 
     def val_store(self, step, elapsed_time, t_mean, tl_mean, tcd_mean, v_mean, vl_mean, vcd_mean, mrg_mean, cgt_mean):
         tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
-        tf.print("mean train loss since last update:", t_mean, summarize=-1)
+        tf.print("mean train loss since last validation:", t_mean, summarize=-1)
         with open(os.path.join(self.log_path, 'train_loss.txt'), 'ab') as tltxt:
             np.savetxt(tltxt, [np.array(t_mean)], fmt='%.3f', delimiter=",")
 
@@ -195,7 +197,7 @@ class Train(object):
         with open(os.path.join(self.log_path, 'train_coordd.txt'), 'ab') as tcdtxt:
             np.savetxt(tcdtxt, [np.array(tcd_mean)], fmt='%.3f', delimiter=",")
         
-        tf.print("mean val loss since last update:", v_mean, summarize=-1)
+        tf.print("mean validation loss:", v_mean, summarize=-1)
         with open(os.path.join(self.log_path, 'val_loss.txt'), 'ab') as vltxt:
             np.savetxt(vltxt, [np.array(v_mean)], fmt='%.3f', delimiter=",")
 
@@ -298,6 +300,8 @@ class Train(object):
             test_cgt.append(t_closest_to_gt)
         
         test_res = [np.array(tf.squeeze(tf.reduce_mean(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
+        total_time = int(time.time() - start_time)
+        test_res.append([total_time])
         with open(os.path.join(self.log_path, 'test_res.txt'), 'ab') as testtxt:
             for i in test_res:
                 np.savetxt(testtxt, [i], fmt='%3.3f', delimiter=",")
@@ -309,10 +313,10 @@ def vis_points(image, points, diameter=5, given_kp=None):
     im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
 
     for (w, h) in points:
-        cv2.circle(im, (int(h), int(w)), diameter, (255, 0, 0), -1)
+        cv2.circle(im, (int(h), int(w)), diameter, (1., 0., 0.), -1)
     if given_kp is not None:
         for (w, h) in given_kp:
-            cv2.circle(im, (int(h), int(w)), diameter, (0, 255, 0), -1)
+            cv2.circle(im, (int(h), int(w)), diameter, (0., 1., 0.), -1)
     plt.imshow(im)
 
 def create_dir(path):
@@ -346,10 +350,11 @@ def store_parameters(data_config, opti_config, unet_config, ntm_config, training
         json.dump(params, fp, indent=4)
     fp.close()
 
-def main(path, data_config, opti_config, unet_config, ntm_config, training_params, run_number=None, start_steps=0, num_gpu=1):
+def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, training_params, run_number=None, start_steps=0, num_gpu=1):
     devices = ['/device:GPU:{}'.format(i) for i in range(num_gpu)]
     strategy = tf.distribute.MirroredStrategy(devices)
-    dataset = data.Data_Loader(name=data_config['dataset'],
+    dataset = data.Data_Loader(data_path=data_dir,
+                               name=data_config['dataset'],
                                batch_size=data_config["batch_size"],
                                train_pct=data_config["train_pct"],
                                val_pct=data_config["val_pct"],
@@ -463,11 +468,12 @@ if __name__ == "__main__":
     mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously
     '''
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
+    DATA_DIR = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
 
-    data_config = {"dataset":'droso',
+    data_config = {"dataset":'cephal',
                    "batch_size": 2,
                    "im_size": [256,256],
-                   "sigma": 1.,
+                   "sigma": 1.5,
                    "lm_count": 5,
                    "kp_list_in": None,
                    "train_pct":10,
@@ -488,22 +494,22 @@ if __name__ == "__main__":
     
     unet_config = {"num_filters": 16,
                    "fmap_inc_factor": 2,
-                   "ds_factors":[[2,2],[2,2],[2,2],[2,2],[2,2]]}
+                   "ds_factors":[[2,2],[2,2],[2,2],[2,2]]}
 
 
     ntm_config = {"0":{"enc_dec_param":{"num_filters":16,
                                                "kernel_size":3,
                                                "pool_size":[4,4]},
-                              "ntm_param":{"controller_units":256,
-                                           "memory_size":64,
+                              "ntm_param":{"controller_units":512,
+                                           "memory_size":32,
                                            "memory_vector_dim":256,
                                            "output_dim":256,
                                            "read_head_num":3,
                                            "write_head_num":3}}
                         }
     
-    training_params = {"num_training_iterations": 10000,
-                       "validation_steps": 5,
+    training_params = {"num_training_iterations": 1000,
+                       "validation_steps": 10,
                        "report_interval": 100,
                        "kp_metric_margin": 2,
                        "checkpoint_interval": 1000,
@@ -511,7 +517,7 @@ if __name__ == "__main__":
                        "mode": "iter"
                        }
 
-    main(PATH, data_config, opti_config, unet_config, ntm_config, training_params)
+    main(PATH, DATA_DIR, data_config, opti_config, unet_config, ntm_config, training_params)
 
     
     
