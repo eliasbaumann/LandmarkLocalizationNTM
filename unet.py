@@ -33,25 +33,25 @@ class unet2d(tf.keras.Model):
         self.unet_rec = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, batch_size=self.batch_size, im_size=self.im_size)
         self.logits = conv_pass(1, self.num_landmarks, 1, activation=None)#tf.keras.activations.tanh), payer et al do no activation
 
-    def call(self, inputs):
+    def call(self, inputs, training=True):
         states = self.setup_states()
         out = []
         mem_out = []
         for i in range(self.seq_len):
-            unet_2d, states = self.unet_rec(inputs[i], states)
+            unet_2d, states = self.unet_rec(inputs[i], states, training)
             res = self.logits(unet_2d) 
             out.append(res)
             mem_out.append(states)
         return tf.stack(out, axis=0), mem_out
 
-    def pred_test(self, inputs):
+    def pred_test(self, inputs, training=False):
         states = self.setup_states()
         out = []
         mem_out = []
         lab = inputs[0,:,1:,:,:]
         img = inputs[0,:,:1,:,:]
         for _ in range(self.seq_len):
-            unet_2d, states = self.unet_rec(tf.concat([img,lab], axis=1), states)
+            unet_2d, states = self.unet_rec(tf.concat([img,lab], axis=1), states, training=training)
             res = self.logits(unet_2d) 
             out.append(res)
             mem_out.append(states)
@@ -73,7 +73,7 @@ class unet2d(tf.keras.Model):
 
 
 class unet(tf.keras.layers.AbstractRNNCell):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.nn.relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
+    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, batch_size=None, activation=tf.nn.leaky_relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
         super(unet, self).__init__(name=name+'_'+str(layer))
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
@@ -124,7 +124,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.crop = None
             self.out_conv = None
     
-    def call(self, inputs, prev_state):
+    def call(self, inputs, prev_state, training=True):
         f_left = self.inp_conv(inputs)
         state = tf.constant(0.)
         if self.ntm_config is not None:
@@ -133,11 +133,11 @@ class unet(tf.keras.layers.AbstractRNNCell):
                 f_left = tf.concat([mem, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
-            f_left = self.drop(f_left)
+            f_left = self.drop(f_left, training=training)
             return f_left, [state]
         # to add dropout to second to last layer as well: 
         elif self.layer == len(self.downsample_factors)-1:
-            f_left = self.drop(f_left)
+            f_left = self.drop(f_left, training=training)
         g_in = self.ds(f_left)
         g_out, state_rec = self.unet_rec(g_in, prev_state)
 

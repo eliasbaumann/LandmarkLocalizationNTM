@@ -110,7 +110,7 @@ class Train(object):
         return loss, kp_loss, c_dist
 
     def val_step(self, inp, lab):
-        pred, _ = self.model(inp)
+        pred, _ = self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
@@ -123,7 +123,7 @@ class Train(object):
             given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
         else:
             given_kp = None
-        pred, states = self.model.pred_test(inp) if self.iter else self.model(inp)
+        pred, states = self.model.pred_test(inp, training=False) if self.iter else self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
@@ -320,7 +320,7 @@ def vis_points(image, points, diameter=5, given_kp=None):
     plt.imshow(im)
 
 def create_dir(path):
-    previous_runs = os.listdir(path)
+    previous_runs = [i for i in os.listdir(path) if "run_" in i]
     if len(previous_runs) == 0:
         run_number = 1
     else:
@@ -347,11 +347,11 @@ def store_parameters(data_config, opti_config, unet_config, ntm_config, training
               "training_params":training_params
              }
     with open(os.path.join(log_path,'params.json'), 'w') as fp:
-        json.dump(params, fp, indent=4)
+        json.dump(params, fp)
     fp.close()
 
-def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, training_params, run_number=None, start_steps=0, num_gpu=1):
-    devices = ['/device:GPU:{}'.format(i) for i in range(num_gpu)]
+def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, training_params, run_number=None, start_steps=0):
+    devices = ['/device:GPU:{}'.format(i) for i in range(training_params["num_gpu"])]
     strategy = tf.distribute.MirroredStrategy(devices)
     dataset = data.Data_Loader(data_path=data_dir,
                                name=data_config['dataset'],
@@ -465,10 +465,12 @@ if __name__ == "__main__":
     kp_metric_margin, 3, int, pixel margin at which a kp is counted as close enough
     checkpoint_interval, 500, int, number of steps at which a model checkpoints happens, -> can only be used to reuse model for predictions, not to resume training, because no way to ensure data consistency currently
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
-    mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously
+    mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously (or with kp_list_in input landmarks)
     '''
-    PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs'
+    PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs\\Experiments'
     DATA_DIR = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
+
+    path_list = [os.path.join(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json')]
 
     data_config = {"dataset":'cephal',
                    "batch_size": 2,
@@ -504,17 +506,18 @@ if __name__ == "__main__":
                                            "memory_size":32,
                                            "memory_vector_dim":256,
                                            "output_dim":256,
-                                           "read_head_num":3,
-                                           "write_head_num":3}}
+                                           "read_head_num":5,
+                                           "write_head_num":5}}
                         }
     
-    training_params = {"num_training_iterations": 1000,
+    training_params = {"num_training_iterations": 1,
                        "validation_steps": 10,
                        "report_interval": 100,
                        "kp_metric_margin": 2,
                        "checkpoint_interval": 1000,
                        "num_test_samples": 10,
-                       "mode": "iter"
+                       "mode": "iter",
+                       "num_gpu": 1
                        }
 
     main(PATH, DATA_DIR, data_config, opti_config, unet_config, ntm_config, training_params)
