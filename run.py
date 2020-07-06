@@ -408,6 +408,11 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, trai
         trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, log_path=log_path, cp_path=cp_path)
         trainer.iter_loop(train=train_data, val=val_data, test=test_data, n_landmarks=dataset.n_landmarks, start_steps=start_steps)
 
+def read_json(path):
+    with open(path) as f:
+        data = json.load(f)
+    return data["data_config"], data["opti_config"], data["unet_config"], data["ntm_config"], data["training_params"]
+
 if __name__ == "__main__":
     '''
     config explanation:
@@ -467,60 +472,15 @@ if __name__ == "__main__":
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
     mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously (or with kp_list_in input landmarks)
     '''
-    PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs\\Experiments'
+    PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs\\Experiments' # can define this explicitely to be an experiment folder to re-run select experiments
     DATA_DIR = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
 
-    path_list = [os.path.join(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json')]
+    path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json')]
+    for experiment in path_list:
+        data_config, opti_config, unet_config, ntm_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
+        main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, training_params)
 
-    data_config = {"dataset":'cephal',
-                   "batch_size": 2,
-                   "im_size": [256,256],
-                   "sigma": 1.5,
-                   "lm_count": 5,
-                   "kp_list_in": None,
-                   "train_pct":10,
-                   "val_pct":10,
-                   "test_pct":10,
-                   "repeat":True,
-                   "prefetch":True,
-                   "n_aug_rounds":10
-                   }
     
-    opti_config = {"learning_rate": 1e-3,
-                   "adam_beta_1": 0.9,
-                   "adam_beta_2": 0.999,
-                   "adam_epsilon": 1e-7,
-                   "decay_rate": .9, 
-                   "decay_steps": 500
-                   }
-    
-    unet_config = {"num_filters": 16,
-                   "fmap_inc_factor": 2,
-                   "ds_factors":[[2,2],[2,2],[2,2],[2,2]]}
-
-
-    ntm_config = {"0":{"enc_dec_param":{"num_filters":16,
-                                               "kernel_size":3,
-                                               "pool_size":[4,4]},
-                              "ntm_param":{"controller_units":512,
-                                           "memory_size":32,
-                                           "memory_vector_dim":256,
-                                           "output_dim":256,
-                                           "read_head_num":5,
-                                           "write_head_num":5}}
-                        }
-    
-    training_params = {"num_training_iterations": 1,
-                       "validation_steps": 10,
-                       "report_interval": 100,
-                       "kp_metric_margin": 2,
-                       "checkpoint_interval": 1000,
-                       "num_test_samples": 10,
-                       "mode": "iter",
-                       "num_gpu": 1
-                       }
-
-    main(PATH, DATA_DIR, data_config, opti_config, unet_config, ntm_config, training_params)
 
     
     
