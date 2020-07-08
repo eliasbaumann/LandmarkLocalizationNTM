@@ -157,17 +157,31 @@ class Train(object):
             self.store_mem(states, filenames[i], i)
 
     def store_mem(self, states, fn, batch_no):
-        if states is None:
+        if self.model.ntm_config is None: 
             return
         keys = list(map(int, self.model.ntm_config.keys()))
         os.makedirs(self.log_path+'\\samples\\'+fn)
         count = 0
         for state in states:
             for key in keys:
-                M = state[key]['M'][batch_no].numpy()
-                M = (M+1)/2.
-                plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-                plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+str(count)+'mem.png')
+                if self.model.ntm_config[str(key)]["ntm_param"] is None:
+                    break
+                pos = self.model.ntm_config[str(key)]['enc_dec_param']['pos']
+                if pos == "b":
+                    M_l = state[key*2]['M'][batch_no].numpy()
+                    M_l = (M_l+1)/2.
+                    plt.imshow(cv2.cvtColor(M_l, cv2.COLOR_GRAY2BGR))
+                    plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_l_'+str(count)+'mem.png')
+                    M_r = state[key*2+1]['M'][batch_no].numpy()
+                    M_r = (M_r+1)/2.
+                    plt.imshow(cv2.cvtColor(M_r, cv2.COLOR_GRAY2BGR))
+                    plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_r_'+str(count)+'mem.png')
+                else:
+                    key = key*2 if pos=="l" else key*2+1
+                    M = state[key]['M'][batch_no].numpy()
+                    M = (M+1)/2.
+                    plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
+                    plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+pos+'_'+str(count)+'mem.png')
             count += 1
 
     @tf.function
@@ -419,7 +433,7 @@ if __name__ == "__main__":
     Config is stored and loaded as .json into a python dict
 
     #### data_config
-    dataset: 'droso', str, (TODO maybe another dataset at some point), choose which dataset to run experiment o n
+    dataset: 'droso' or 'cephal', str, choose which dataset to run experiment with
     batch_size: 2, int8, batch size, needs to be divisible by number of GPUs -> batch_size = GLOBAL_BATCH_SIZE
     im_size: [256,256], int tuple, resize images to this size
     sigma: 1., float, size of gaussian blob on heatmap
@@ -434,10 +448,10 @@ if __name__ == "__main__":
 
     #### opti_config
     learning_rate, 1e-3, float, optimizer (adam) learning rate
-    adam_beta_1, 0.9, float The exponential decay rate for the 1st moment estimates # TODO check whether this decays the learning rate
+    adam_beta_1, 0.9, float The exponential decay rate for the 1st moment estimates   
     adam_beta_2,  0.999, float, The exponential decay rate for the 2nd moment estimates
     adam_epsilon, 1e-7, float, A small constant for numerical stability 
-    decay_rate: .9, float, rate at which to decay # see: initial_learning_rate * decay_rate ^ (step / decay_steps)
+    decay_rate: .9, float, rate at which to decay lr -> adam only adjusts learning rate by last n gradients not globally # see: initial_learning_rate * decay_rate ^ (step / decay_steps)
     decay_steps: 500, int, exponent to accelerate decay after x steps # ^ 
 
     #### unet_config
@@ -450,10 +464,11 @@ if __name__ == "__main__":
     !! on first unet level is provided by feeding a dict with name = unet level {"0":{"enc_dec_param":{...}}}        !!
     !! ntm_config further contains two sub-dictionaries: enc_dec_param, ntm_param                                    !!
     
-        ###### end_dec_param, this is finnicky and needs to match the unet position
+        ###### enc_dec_param, this is finnicky and needs to match the unet position
         num_filters, 16, int,  number of conv filters at each layer
         kernel_size, 3, int, conv_layer kernel size
         pool_size, [4,4], list of int, defines number of encoder decoder layers and how much is pooled
+        pos:, one of:["l","r","b"], str, defines the lateral position of the enc dec -> either at downsampling, upsampling or both sides
     
         ###### ntm_param, set to None if no NTM, just encoder-decoder architecture
         controller_units, 256, int, number of units of controller dense layer, controller defines what and how to write and read
@@ -475,7 +490,7 @@ if __name__ == "__main__":
     PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs\\Experiments' # can define this explicitely to be an experiment folder to re-run select experiments
     DATA_DIR = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
 
-    path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json')]
+    path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json') and "run_" not in dirpath] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:
         data_config, opti_config, unet_config, ntm_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
         main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, training_params)

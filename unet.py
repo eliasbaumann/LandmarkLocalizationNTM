@@ -62,10 +62,7 @@ class unet2d(tf.keras.Model):
         states = []
         _unet = self.unet_rec
         while _unet is not None:
-            if _unet.ntm_enc_dec is not None:
-                states = [*states, _unet.get_initial_state()]
-            else:
-                states = [*states, tf.constant(0.)]
+            states = [*states, *_unet.get_initial_states()]
             _unet = _unet.unet_rec
         return states
 
@@ -88,14 +85,21 @@ class unet(tf.keras.layers.AbstractRNNCell):
                                   num_repetitions=2,
                                   activation=self.activation,
                                   name='unet_left_%i'%self.layer)
-        self.ntm_enc_dec = None
+        self.ntm_l = None
+        self.ntm_r = None
         self.add = tf.keras.layers.Add(name='ntm_out_add_%i' %self.layer)
         if self.ntm_config is not None:
             if self.layer in list(map(int, self.ntm_config.keys())):
+                conf = self.ntm_config[str(self.layer)]
                 assert self.batch_size is not None, 'Please set batch_size in unet2d init'
-                assert self.ntm_config[str(self.layer)]["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
-                self.ntm_enc_dec = Encoder_Decoder_Wrapper(ntm_config=self.ntm_config[str(self.layer)], batch_size=self.batch_size, layer=self.layer, name="ntm_enc_dec_"+str(self.layer))
-        
+                assert conf["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
+                if conf["enc_dec_param"]["pos"] == "l":
+                    self.ntm_l = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_l_"+str(self.layer))
+                elif conf["enc_dec_param"]["pos"] == "r":
+                    self.ntm_r = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_r_"+str(self.layer))
+                else:
+                    self.ntm_l = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_l_"+str(self.layer))
+                    self.ntm_r = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_r_"+str(self.layer))   
         if self.layer >= len(self.downsample_factors)-1:
             self.drop = tf.keras.layers.Dropout(.2,seed=42, name='dropout_%i'%self.layer)
         else:
@@ -125,16 +129,16 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.out_conv = None
     
     def call(self, inputs, prev_state, training=True):
+        state_l = tf.constant(0.)
+        state_r = tf.constant(0.)
         f_left = self.inp_conv(inputs)
-        state = tf.constant(0.)
-        if self.ntm_config is not None:
-            if self.layer in list(map(int, self.ntm_config.keys())):
-                mem, state = self.ntm_enc_dec(f_left, prev_state[self.layer])
-                f_left = tf.concat([mem, f_left], axis=1)
+        if self.ntm_l is not None:
+            mem_l, state_l = self.ntm_l(f_left, prev_state[self.layer*2])
+            f_left = tf.concat([mem_l, f_left], axis=1)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left, training=training)
-            return f_left, [state]
+            return f_left, [state_l]
         # to add dropout to second to last layer as well: 
         elif self.layer == len(self.downsample_factors)-1:
             f_left = self.drop(f_left, training=training)
@@ -144,9 +148,11 @@ class unet(tf.keras.layers.AbstractRNNCell):
         g_out_upsampled = self.us(g_out)
         f_left_cropped = self.crop(f_left, tf.shape(g_out_upsampled))
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
+        if self.ntm_r is not None:
+            mem_r, state_r = self.ntm_r(f_right, prev_state[self.layer*2+1])
+            f_right = tf.concat([mem_r, f_right], axis=1)
         f_out = self.out_conv(f_right)
-        
-        return f_out, [state, *state_rec]
+        return f_out, [state_l, state_r, *state_rec]
 
     def get_config(self):
         config = super(unet, self).get_config()
@@ -154,9 +160,16 @@ class unet(tf.keras.layers.AbstractRNNCell):
         return config
 
     @tf.function
-    def get_initial_state(self):
-        state = self.ntm_enc_dec.cell.get_initial_state()
-        return state
+    def get_initial_states(self):
+        state_l = tf.constant(0.)
+        state_r = tf.constant(0.)
+        if self.ntm_l is not None:
+            if self.ntm_l.cell is not None:
+                state_l = self.ntm_l.cell.get_initial_state()
+        if self.ntm_r is not None:
+            if self.ntm_r.cell is not None:
+                state_r = self.ntm_r.cell.get_initial_state()
+        return state_l, state_r
 
 
         
