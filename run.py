@@ -10,17 +10,10 @@ import tensorflow as tf
 import unet
 import data
 
-physical_devices = tf.config.list_physical_devices('GPU')
-try:
-    [tf.config.experimental.set_memory_growth(i, True) for i in physical_devices]
-except:
-  # Invalid device or cannot modify virtual devices once initialized.
-    pass
-
 # tf.config.experimental_run_functions_eagerly(True)
 
 class Train(object):
-    def __init__(self, model, strategy, data_config, opti_config, training_params, log_path, cp_path):
+    def __init__(self, model, strategy, data_config, opti_config, training_params, data_landmarks, log_path, cp_path):
         self.model = model
         self.strategy = strategy
         lr_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=opti_config["learning_rate"],
@@ -38,6 +31,7 @@ class Train(object):
         self.data_config = data_config
         self.opti_config = opti_config
         self.training_params = training_params
+        self.data_landmarks = data_landmarks
         self.log_path = log_path
         self.cp_path = cp_path
         self.iter = True if training_params["mode"]=="iter" else False
@@ -100,6 +94,7 @@ class Train(object):
         return lab, pred, kp_loss, c_dist
 
     def train_step(self, inp, lab): #TODO
+        inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
         with tf.GradientTape() as tape:
             pred, _, _ = self.model(inp)
             loss = self.compute_loss(lab, pred)
@@ -110,6 +105,7 @@ class Train(object):
         return loss, kp_loss, c_dist
 
     def val_step(self, inp, lab):
+        inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
         pred, _, _ = self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
@@ -117,6 +113,7 @@ class Train(object):
         return  loss, kp_loss, c_dist, within_margin, closest_to_gt
     
     def test_step(self, inp, lab, fn):
+        inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
         img = inp[0,:,:1,:,:]
         filenames = [i.decode('UTF-8') for i in fn.numpy()]
         if not (self.data_config["kp_list_in"] is None or self.data_config["kp_list_in"] == [0]):
@@ -141,19 +138,19 @@ class Train(object):
 
         pred_keypoints = pred_keypoints.numpy()
         lab_keypoints = lab_keypoints.numpy()
-        if not os.path.exists(self.log_path+'\\samples\\'):
-            os.makedirs(self.log_path+'\\samples\\')
+        if not os.path.exists(self.log_path+'/samples/'):
+            os.makedirs(self.log_path+'/samples/')
         if given_kp is not None:
             given_kp = tf.transpose(self.get_max_indices_argmax(given_kp), [1,0,2]).numpy()
         else:
             given_kp = np.repeat(None, img.shape[0])
         for i in range(img.shape[0]): # per batch iteration                
             vis_points(img[i], pred_keypoints[i], 3, given_kp=given_kp[i])
-            plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_pred.png')
+            plt.savefig(self.log_path+'/samples/'+filenames[i]+'_pred.png')
             vis_points(img[i], lab_keypoints[i], 3, given_kp=given_kp[i])
-            plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_gt.png')
+            plt.savefig(self.log_path+'/samples/'+filenames[i]+'_gt.png')
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
-            plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_pred_logits.png')
+            plt.savefig(self.log_path+'/samples/'+filenames[i]+'_pred_logits.png')
             self.store_mem(states, filenames[i], i)
             self.store_attn(attn_maps, filenames[i], i)
 
@@ -161,7 +158,7 @@ class Train(object):
         if self.model.ntm_config is None: 
             return
         keys = list(map(int, self.model.ntm_config.keys()))
-        os.makedirs(self.log_path+'\\samples\\'+fn)
+        os.makedirs(self.log_path+'/samples/'+fn)
         count = 0
         for state in states:
             for key in keys:
@@ -172,30 +169,30 @@ class Train(object):
                     M_l = state[key*2]['M'][batch_no].numpy()
                     M_l = (M_l+1)/2.
                     plt.imshow(cv2.cvtColor(M_l, cv2.COLOR_GRAY2BGR))
-                    plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_l_'+str(count)+'mem.png')
+                    plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_l_'+str(count)+'mem.png')
                     M_r = state[key*2+1]['M'][batch_no].numpy()
                     M_r = (M_r+1)/2.
                     plt.imshow(cv2.cvtColor(M_r, cv2.COLOR_GRAY2BGR))
-                    plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_r_'+str(count)+'mem.png')
+                    plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_r_'+str(count)+'mem.png')
                 else:
                     key = key*2 if pos=="l" else key*2+1
                     M = state[key]['M'][batch_no].numpy()
                     M = (M+1)/2.
                     plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-                    plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+pos+'_'+str(count)+'mem.png')
+                    plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(count)+'mem.png')
             count += 1
     
     def store_attn(self, attn, fn, batch_no):
         if self.model.attn_config is None:
             return
         keys = list(map(int, self.model.attn_config.keys()))
-        os.makedirs(self.log_path+'\\samples\\'+fn)
+        os.makedirs(self.log_path+'/samples/'+fn)
         count = 0
         for attn_map in attn:
             for key in keys:
                 M = tf.squeeze(attn_map[key][batch_no]).numpy()
                 plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-                plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+str(count)+'attn.png')
+                plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+str(count)+'attn.png')
             count +=1
 
 
@@ -264,9 +261,7 @@ class Train(object):
         start_time = time.time()
         for step in range(start_steps, self.training_params["num_training_iterations"]+1):
             img, lab, _ = next(train)
-            inp, lab = self.convert_input(img, lab, n_landmarks, self.data_config["lm_count"], self.iter) # TODO how does this behave when non iter
-
-            loss, kp_loss, c_dist = self.distributed_train_step(inp, lab)
+            loss, kp_loss, c_dist = self.distributed_train_step(img, lab)
             
             train_loss.append(loss)
             train_loss_lm.append([kp_loss])
@@ -275,8 +270,7 @@ class Train(object):
             if step % training_params["report_interval"] == 0:
                 for _ in range(training_params["validation_steps"]):
                     img_v, lab_v, _ = next(val)
-                    inp_v, lab_v = self.convert_input(img_v, lab_v, n_landmarks, data_config["lm_count"], self.iter)
-                    v_loss, v_kp_loss, v_c_dist, v_within_margin, v_closest_to_gt = self.distributed_val_step(inp_v, lab_v)
+                    v_loss, v_kp_loss, v_c_dist, v_within_margin, v_closest_to_gt = self.distributed_val_step(img_v, lab_v)
 
                     mrg_lm.append(v_within_margin)
                     cgt_lm.append(v_closest_to_gt)
@@ -320,8 +314,7 @@ class Train(object):
         test_cgt = []
         for _ in range(training_params["num_test_samples"]):
             img_t, lab_t, fn = next(test)
-            inp_t, lab_t = self.convert_input(img_t, lab_t, n_landmarks, data_config["lm_count"], self.iter)
-            t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(inp_t, lab_t, fn)
+            t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(img_t, lab_t, fn)
             test_loss.append(t_loss)
             test_kp_loss.append([t_kp_loss])
             test_c_dist.append([t_c_dist])
@@ -357,14 +350,14 @@ def create_dir(path):
     logdir = 'run_%02d' % run_number
     l_dir = os.path.join(path, logdir)
     os.mkdir(l_dir)
-    cp_dir = l_dir +'\\cp\\cp-{step:04d}'
+    cp_dir = l_dir +'//cp/cp-{step:04d}'
     return l_dir, cp_dir
 
 def load_dir(path, run_number, step):
     logdir = 'run_%02d' % run_number
     l_dir = os.path.join(path, logdir)
-    cp_pth = l_dir+'\\cp\\cp-{step:04d}'
-    cp_dir = l_dir+'\\cp\\cp-{step:04d}'.format(step=step)
+    cp_pth = l_dir+'/cp/cp-{step:04d}'
+    cp_dir = l_dir+'/cp/cp-{step:04d}'.format(step=step)
     #cp_dir = os.path.dirname(cp_pth)
     return l_dir, cp_pth, cp_dir
 
@@ -435,8 +428,8 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
         val_data = strategy.experimental_distribute_dataset(dataset.val_data)
         test_data = strategy.experimental_distribute_dataset(dataset.test_data)
 
-        trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, log_path=log_path, cp_path=cp_path)
-        trainer.iter_loop(train=train_data, val=val_data, test=test_data, n_landmarks=dataset.n_landmarks, start_steps=start_steps)
+        trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, data_landmarks=dataset.n_landmarks, log_path=log_path, cp_path=cp_path)
+        trainer.iter_loop(train=train_data, val=val_data, test=test_data, start_steps=start_steps)
 
 def read_json(path):
     with open(path) as f:
@@ -507,8 +500,8 @@ if __name__ == "__main__":
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
     mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously (or with kp_list_in input landmarks)
     '''
-    PATH = 'C:\\Users\\Elias\\Desktop\\MA_logs\\Experiments' # can define this explicitely to be an experiment folder to re-run select experiments
-    DATA_DIR = 'C:/Users/Elias/Desktop/Landmark_Datasets/'
+    PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' # can define this explicitely to be an experiment folder to re-run select experiments
+    DATA_DIR = '/fast/AG_Kainmueller/elbauma/landmark-ntm/datasets/'
 
     path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json') and "run_" not in dirpath] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:

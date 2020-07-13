@@ -204,7 +204,7 @@ class Data_Loader():
         def process_path(file_path):
             img = decode_image(file_path)
             img.set_shape([2400,1935,1]) # H,W,C
-            file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
+            file_name = tf.strings.split(tf.strings.split(file_path, sep='/')[-1], sep='.')[0]
             label = tf.strings.split(tf.io.read_file(self.path+self.name+'/raw/'+file_name+'.txt'),sep='\r\n')[:19]
             label = tf.map_fn(lambda x: tf.strings.split(x,sep=','),label)
             label = tf.strings.to_number(label, out_type=tf.dtypes.int32)
@@ -220,13 +220,13 @@ class Data_Loader():
         self.ds_size = 471 # TODO change when full data available
         self.orig_im_size = tf.constant([3840,3234])
         data_dir = pathlib.Path(self.path+self.name+'/images/')
-        list_im = tf.data.Dataset.list_files(str(data_dir)+'*.jpg')
+        list_im = tf.data.Dataset.list_files(str(data_dir)+'*/*.jpg')
 
         @tf.function
         def process_path(file_path):
             img = decode_image(file_path)
             img.set_shape([3234,3840,1]) # H, W, C
-            file_name = tf.strings.split(tf.strings.split(file_path, sep='\\')[-1], sep='.')[0]
+            file_name = tf.strings.split(tf.strings.split(file_path, sep='/')[-1], sep='.')[0]
             label = tf.strings.split(tf.io.read_file(self.path+self.name+'/raw/'+file_name+'.txt'), sep='\n')[:-1]
             label = tf.map_fn(lambda x: tf.strings.split(x, sep=' '), label)
             label = tf.strings.to_number(label, out_type=tf.dtypes.float32)
