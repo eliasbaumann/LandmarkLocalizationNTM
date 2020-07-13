@@ -1,8 +1,6 @@
 import tensorflow as tf
 from enc_dec import Encoder_Decoder_Wrapper
 from attention import AttentionGate
-# TODO: Tasks 
-# - fixed upsampling instead of deconv?? Is in, but needs tryiing
 
 class convnet2d(tf.keras.Model):
     def __init__(self, num_fmaps, num_landmarks, name='convnet2d', **kwargs):
@@ -76,7 +74,7 @@ class unet2d(tf.keras.Model):
 
 class unet(tf.keras.layers.AbstractRNNCell):
     def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, attn_config=None, batch_size=None, activation=tf.nn.leaky_relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
-        super(unet, self).__init__(name=name+'_'+str(layer))
+        super(unet, self).__init__(name=name+'_'+str(layer), **kwargs)
         self.num_fmaps = num_fmaps
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors

@@ -1,9 +1,6 @@
 import tensorflow as tf
 import numpy as np
 
-import collections
-
-
 def create_linear_initializer(input_size):
     stddev = 1.0 / np.sqrt(input_size)
     return tf.keras.initializers.TruncatedNormal(stddev=stddev, seed=42)
