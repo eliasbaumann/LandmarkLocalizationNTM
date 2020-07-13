@@ -101,7 +101,7 @@ class Train(object):
 
     def train_step(self, inp, lab): #TODO
         with tf.GradientTape() as tape:
-            pred, _ = self.model(inp)
+            pred, _, _ = self.model(inp)
             loss = self.compute_loss(lab, pred)
         grad = tape.gradient(loss, self.model.trainable_weights)
         clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
@@ -110,7 +110,7 @@ class Train(object):
         return loss, kp_loss, c_dist
 
     def val_step(self, inp, lab):
-        pred, _ = self.model(inp, training=False)
+        pred, _, _ = self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
@@ -123,14 +123,14 @@ class Train(object):
             given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
         else:
             given_kp = None
-        pred, states = self.model.pred_test(inp, training=False) if self.iter else self.model(inp, training=False)
+        pred, states, attn_maps = self.model.pred_test(inp, training=False) if self.iter else self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
-        self.store_samples(img, pred, lab, filenames, given_kp, states)
+        self.store_samples(img, pred, lab, filenames, given_kp, states, attn_maps)
         return loss, kp_loss, c_dist, within_margin, closest_to_gt
 
-    def store_samples(self, img, pred, lab, filenames, given_kp = None, states=None):
+    def store_samples(self, img, pred, lab, filenames, given_kp = None, states=None, attn_maps=None):
         pred_keypoints = tf.transpose(self.get_max_indices_argmax(pred), [1,0,2])
         lab_keypoints = tf.transpose(self.get_max_indices_argmax(lab), [1,0,2])
         
@@ -155,6 +155,7 @@ class Train(object):
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
             plt.savefig(self.log_path+'\\samples\\'+filenames[i]+'_pred_logits.png')
             self.store_mem(states, filenames[i], i)
+            self.store_attn(attn_maps, filenames[i], i)
 
     def store_mem(self, states, fn, batch_no):
         if self.model.ntm_config is None: 
@@ -183,6 +184,20 @@ class Train(object):
                     plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
                     plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+pos+'_'+str(count)+'mem.png')
             count += 1
+    
+    def store_attn(self, attn, fn, batch_no):
+        if self.model.attn_config is None:
+            return
+        keys = list(map(int, self.model.attn_config.keys()))
+        os.makedirs(self.log_path+'\\samples\\'+fn)
+        count = 0
+        for attn_map in attn:
+            for key in keys:
+                M = tf.squeeze(attn_map[key][batch_no]).numpy()
+                plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
+                plt.savefig(self.log_path+'\\samples\\'+fn+'\\'+str(key)+'_'+str(count)+'attn.png')
+            count +=1
+
 
     @tf.function
     def distributed_train_step(self, inp, lab):
@@ -364,7 +379,7 @@ def store_parameters(data_config, opti_config, unet_config, ntm_config, training
         json.dump(params, fp)
     fp.close()
 
-def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, training_params, run_number=None, start_steps=0):
+def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn_config, training_params, run_number=None, start_steps=0):
     devices = ['/device:GPU:{}'.format(i) for i in range(training_params["num_gpu"])]
     strategy = tf.distribute.MirroredStrategy(devices)
     dataset = data.Data_Loader(data_path=data_dir,
@@ -408,6 +423,7 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, trai
                                  num_landmarks=num_landmarks,
                                  seq_len=seq_len,
                                  ntm_config=ntm_config,
+                                 attn_config=attn_config,
                                  batch_size=data_config["batch_size"],
                                  im_size=data_config["im_size"]
                                  )
@@ -425,7 +441,7 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, trai
 def read_json(path):
     with open(path) as f:
         data = json.load(f)
-    return data["data_config"], data["opti_config"], data["unet_config"], data["ntm_config"], data["training_params"]
+    return data["data_config"], data["opti_config"], data["unet_config"], data["ntm_config"], data["attn_config"], data["training_params"]
 
 if __name__ == "__main__":
     '''
@@ -477,6 +493,10 @@ if __name__ == "__main__":
         output_dim, 256, int, output dimensions of NTM, has to be square-rootable as it is reshaped to square format and then upsampled needs to match the Unet layer output
         read_head_num, 3, int, number of simultaneous read heads
         write_head_num, 3 int, number of simultaneous write heads
+
+    #### attn_config
+    # same structure as ntm_config
+    num_filters, 256, int, number of intermediate filters in the attention gate (see https://arxiv.org/pdf/1804.03999.pdf)
     
     #### training_params
     num_training_iterations, 10000, int, number of training steps, for iterative approach this also means, number of samples put in (does not get reduced by multiple iterations over the same image)
@@ -492,8 +512,8 @@ if __name__ == "__main__":
 
     path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json') and "run_" not in dirpath] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:
-        data_config, opti_config, unet_config, ntm_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
-        main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, training_params)
+        data_config, opti_config, unet_config, ntm_config, attn_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
+        main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, attn_config, training_params)
 
     
 
