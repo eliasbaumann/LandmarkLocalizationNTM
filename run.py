@@ -9,7 +9,6 @@ import tensorflow as tf
 
 import unet
 import data
-# TODO check evaluation metrics if they are faulty because of multiple GPU -> also limit GPU devices used (tensorflow just grabs all)
 # tf.config.experimental_run_functions_eagerly(True)
 
 class Train(object):
@@ -46,8 +45,8 @@ class Train(object):
     def dist_coord_dist(self, gt_labels, logits):
         logits = tf.cast(self.get_max_indices_argmax(logits), tf.float32)
         gt_labels = tf.cast(self.get_max_indices_argmax(gt_labels), tf.float32)
-        loss = tf.reduce_sum(tf.sqrt(tf.reduce_sum(tf.square(tf.abs(gt_labels-logits)), axis=-1)), axis=-1) #pythagoras, mean batch, not entirely accurate for pixel images?
-        return loss * (1./self.global_batch_size)
+        loss = tf.reduce_sum(tf.sqrt(tf.reduce_sum(tf.square(gt_labels-logits), axis=-1)), axis=-1) #pythagoras, mean batch, not entirely accurate for pixel images?
+        return loss
 
     def dist_per_kp_stats_iter(self, gt_labels, logits, margin):
         y_pred_n = self.get_max_indices_argmax(logits)
@@ -87,9 +86,9 @@ class Train(object):
         return inp, lab
 
     def kp_loss_c_dist(self, lab, pred):
-        lab = tf.expand_dims(tf.reshape(tf.transpose(lab, [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
-        pred = tf.expand_dims(tf.reshape(tf.transpose(pred, [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
-        kp_loss = tf.map_fn(lambda y: self.dist_ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32) # batch_div is already applied in loss_fn
+        lab = tf.expand_dims(tf.reshape(tf.transpose(lab, [0,2,1,3,4]), [-1, self.data_config["batch_size"], self.im_size[0], self.im_size[0]]), axis=2)
+        pred = tf.expand_dims(tf.reshape(tf.transpose(pred, [0,2,1,3,4]), [-1, self.data_config["batch_size"], self.im_size[0], self.im_size[0]]), axis=2)
+        kp_loss = tf.map_fn(lambda y: self.dist_ssd_loss(y[0], y[1]), (lab, pred), dtype=tf.float32)*self.batch_div
         c_dist = tf.map_fn(lambda y: self.dist_coord_dist(y[0], y[1]), (lab, pred), dtype=tf.float32)*self.batch_div
         return lab, pred, kp_loss, c_dist
 
@@ -117,7 +116,7 @@ class Train(object):
         img = inp[0,:,:1,:,:]
         filenames = [i.decode('UTF-8') for i in fn.numpy()]
         if not (self.data_config["kp_list_in"] is None or self.data_config["kp_list_in"] == [0]):
-            given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"]//self.strategy.num_replicas_in_sync, self.im_size[0], self.im_size[0]]), axis=2)
+            given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"], self.im_size[0], self.im_size[0]]), axis=2)
         else:
             given_kp = None
         pred, states, attn_maps = self.model.pred_test(inp, training=False) if self.iter else self.model(inp, training=False)
@@ -361,11 +360,12 @@ def load_dir(path, run_number, step):
     #cp_dir = os.path.dirname(cp_pth)
     return l_dir, cp_pth, cp_dir
 
-def store_parameters(data_config, opti_config, unet_config, ntm_config, training_params, log_path):
+def store_parameters(data_config, opti_config, unet_config, ntm_config, attn_config, training_params, log_path):
     params = {"data_config":data_config,
               "opti_config":opti_config,
               "unet_config":unet_config,
               "ntm_config":ntm_config,
+              "attn_config":attn_config,
               "training_params":training_params
              }
     with open(os.path.join(log_path,'params.json'), 'w') as fp:
@@ -407,7 +407,7 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
         log_path, cp_path = create_dir(path)
 
     if run_number is None:
-        store_parameters(data_config, opti_config, unet_config, ntm_config, training_params, log_path)
+        store_parameters(data_config, opti_config, unet_config, ntm_config, attn_config, training_params, log_path)
     
     with strategy.scope():
         model = unet.unet2d(num_fmaps=unet_config["num_filters"],
