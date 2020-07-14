@@ -9,7 +9,7 @@ import tensorflow as tf
 
 import unet
 import data
-
+# TODO check evaluation metrics if they are faulty because of multiple GPU -> also limit GPU devices used (tensorflow just grabs all)
 # tf.config.experimental_run_functions_eagerly(True)
 
 class Train(object):
@@ -243,7 +243,7 @@ class Train(object):
             np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
         cgttxt.close()
 
-    def iter_loop(self, train, val, test, n_landmarks, start_steps):
+    def iter_loop(self, train, val, test, start_steps):
         train = iter(train)
         val = iter(val)
         test = iter(test)
@@ -377,7 +377,7 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
     strategy = tf.distribute.MirroredStrategy(devices)
     dataset = data.Data_Loader(data_path=data_dir,
                                name=data_config['dataset'],
-                               batch_size=data_config["batch_size"],
+                               batch_size=data_config["batch_size"]*strategy.num_replicas_in_sync,
                                train_pct=data_config["train_pct"],
                                val_pct=data_config["val_pct"],
                                test_pct=data_config["test_pct"],
@@ -506,6 +506,8 @@ if __name__ == "__main__":
     path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json') and "run_" not in dirpath] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:
         data_config, opti_config, unet_config, ntm_config, attn_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
+        # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        # os.environ["CUDA_VISIBLE_DEVICES"] = [str(i) for i in range(training_params["num_gpu"])]
         main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, attn_config, training_params)
 
     
