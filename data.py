@@ -106,8 +106,9 @@ class Data_Loader():
             return resized, keypoints, fn
 
         def convert_all(images, keypoints, filename):
-            return tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_tf_resize)
-        return data.flat_map(convert_all)
+            return tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_tf_resize, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        
+        return data.interleave(convert_all, cycle_length=1, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     def augment_data(self, data, imx, imy):
         def _albu_transform(image, keypoints):
@@ -162,13 +163,13 @@ class Data_Loader():
 
 
         def generate_augmentations(images, keypoints, filename):
-            regular_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment)
+            regular_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment, num_parallel_calls=tf.data.experimental.AUTOTUNE)
             for _ in range(self.n_aug_rounds): 
-                aug_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment)
+                aug_ds = tf.data.Dataset.from_tensors((images, keypoints, filename)).map(_augment, num_parallel_calls=tf.data.experimental.AUTOTUNE)
                 regular_ds.concatenate(aug_ds)
             return regular_ds
-        
-        return data.flat_map(generate_augmentations)
+
+        return data.interleave(generate_augmentations, cycle_length=1, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     
     def kp_to_input(self, data, val_data, test_data , kp_list):

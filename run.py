@@ -503,7 +503,7 @@ if __name__ == "__main__":
     PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' # can define this explicitely to be an experiment folder to re-run select experiments
     DATA_DIR = '/fast/AG_Kainmueller/elbauma/landmark-ntm/datasets/'
 
-    path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('.json') and "run_" not in dirpath] # searching for all experiments excluding stored jsons of ran experiments
+    path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('config.json')] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:
         data_config, opti_config, unet_config, ntm_config, attn_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
