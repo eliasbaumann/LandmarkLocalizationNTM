@@ -9,6 +9,7 @@ def _generate_heatmap(coords, imx, sigma=3): #square
     prob = tf.reshape(gaussian.prob(idx),tf.shape(X))
     prob = tf.transpose(prob) # to make it HW instead of WH 
     prob = tf.expand_dims(prob,0)
+    prob = tf.subtract(tf.scalar_mul(tf.constant(2., dtype=tf.float32), prob),tf.constant(1., dtype=tf.float32)) # rescale from [0..1] to [-1..1]
     return prob 
 
 @tf.function

@@ -16,7 +16,7 @@ class unet2d(tf.keras.Model):
         self.im_size = im_size
         self.seq_len = seq_len
         self.unet_rec = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, attn_config=self.attn_config, batch_size=self.batch_size, im_size=self.im_size)
-        self.logits = conv_pass(1, self.num_landmarks, 1, activation=None)#tf.keras.activations.tanh), payer et al do no activation
+        self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh) #, payer et al do no activation
 
     def call(self, inputs, training=True):
         states = self.setup_states()
@@ -114,8 +114,6 @@ class unet(tf.keras.layers.AbstractRNNCell):
                                  im_size=self.im_size)
             self.ds = downsample(factors=self.downsample_factors[self.layer], name='ds_%i'%self.layer)
             self.us = upsample(factors=self.downsample_factors[self.layer],
-                               num_fmaps=self.num_fmaps,
-                               activation=self.activation,
                                name='us_%i'%self.layer)
             self.crop = crop_spatial(name='crop_%i'%self.layer)
             self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2, activation=self.activation, name='unet_right_%i'%self.layer)
@@ -217,18 +215,9 @@ class downsample(tf.keras.layers.Layer):
         return config
 
 class upsample(tf.keras.layers.Layer):
-    def __init__(self, factors, num_fmaps, activation=tf.nn.relu, name='us', **kwargs):
+    def __init__(self, factors, name='us', **kwargs):
         super(upsample, self).__init__(name=name, **kwargs)
         self.factors = factors
-        self.num_fmaps = num_fmaps
-        self.activation = activation
-        # self.us = tf.keras.layers.Conv2DTranspose(filters=self.num_fmaps,
-        #                                     kernel_size=self.factors,
-        #                                     strides=self.factors,
-        #                                     padding='valid',
-        #                                     data_format='channels_first',
-        #                                     activation=self.activation,
-        #                                     name=self.name)
         self.us = tf.keras.layers.UpSampling2D(size=self.factors, data_format = "channels_first", name=name+'_internal')
     
     def call(self, inputs):

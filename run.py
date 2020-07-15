@@ -133,7 +133,8 @@ class Train(object):
         img = img.numpy().squeeze() #np.sum(lab.numpy().squeeze(), axis=0)#
         if len(img.shape)<3: # for batcH_size = 1
             img = np.expand_dims(img, axis=0)
-        pred_logits = np.sum(pred.numpy().squeeze(), axis=0)
+        pred_logits = np.max((pred.numpy().squeeze()+1)/2., axis=0)
+        # lab_lg_comp = np.max((lab.numpy().squeeze()+1)/2., axis=0)
 
         pred_keypoints = pred_keypoints.numpy()
         lab_keypoints = lab_keypoints.numpy()
@@ -150,6 +151,8 @@ class Train(object):
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_gt.png')
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_pred_logits.png')
+            # plt.imshow(cv2.cvtColor(lab_lg_comp[i], cv2.COLOR_GRAY2BGR))
+            # plt.savefig(self.log_path+'/samples/'+filenames[i]+'_gt_logits.png')
             self.store_mem(states, filenames[i], i)
             self.store_attn(attn_maps, filenames[i], i)
 
@@ -330,7 +333,7 @@ class Train(object):
 
 
 def vis_points(image, points, diameter=5, given_kp=None):
-    im = image.copy() # h,w
+    im = (image.copy()+1.)/2. # h,w
     im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
 
     for (w, h) in points:
@@ -509,7 +512,6 @@ if __name__ == "__main__":
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         # os.environ["CUDA_VISIBLE_DEVICES"] = [str(i) for i in range(training_params["num_gpu"])]
         main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, attn_config, training_params)
-
     
 
     
