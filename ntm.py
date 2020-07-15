@@ -69,7 +69,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
 
     
-    # @tf.function
     def call(self, x, prev_state):
         prev_read_list = prev_state["read_vector_list"]
         #prev_read_list.set_shape([self.read_head_num, self.batch_size, self.memory_vector_dim])
@@ -122,7 +121,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         }
         return ntm_output, state
     
-    @tf.function
     def _addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
         # content focussing:
         K = self._similarity(k, prev_M, method='cosine')
@@ -148,7 +146,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         return w
 
     # u = k, v = M
-    @tf.function
     def _similarity(self,u,v, method='cosine'):
         '''
         Evaluates similarity between key vector and every row in Memory
@@ -163,7 +160,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             denom = v_norm * u_norm
             return tf.squeeze(nom / (denom + 1e-8))#tf.squeeze(tf.math.divide_no_nan(nom,denom)) # instead of adding 1e-8 
     
-    @tf.function
     def get_initial_state(self):
         initial_state = {
             'controller_state': [self._expand(tf.tanh(self.init_memory_state), dim=0, N=self.batch_size),
@@ -176,11 +172,9 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         }
         return initial_state
 
-    @tf.function
     def _expand(self, x, dim, N):
         return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand_%d' % self.layer)
 
-    @tf.function
     def _learned_init(self, units):
         return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None, name='learned_init_%d' % self.layer)(tf.ones([1, 1])))
 

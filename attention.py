@@ -14,7 +14,6 @@ class AttentionGate(tf.keras.layers.Layer):
         self.conv_psi = tf.keras.layers.Conv2D(filters=1, kernel_size=kernel_size, activation=tf.keras.activations.sigmoid, data_format="channels_first", use_bias=True, name="attn_psi_"+str(self.layer))
         self.activation = tf.keras.layers.ReLU(name="attn_relu_"+str(self.layer))
 
-    @tf.function
     def call(self, inputs, in_gate):
         wx = self.conv_wx(inputs)
         wg = self.conv_wg(in_gate)
