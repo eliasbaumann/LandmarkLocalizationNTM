@@ -2,20 +2,6 @@ import tensorflow as tf
 from enc_dec import Encoder_Decoder_Wrapper
 from attention import AttentionGate
 
-class convnet2d(tf.keras.Model):
-    def __init__(self, num_fmaps, num_landmarks, name='convnet2d', **kwargs):
-        super(convnet2d, self).__init__(name=name, **kwargs)
-        self.num_fmaps = num_fmaps
-        self.num_landmarks = num_landmarks
-        self.convnet = conv_pass(11, 128, 5)
-        self.heatmap = conv_pass(1, self.num_landmarks, 1, activation=None)
-
-    def call(self, inputs):
-        x = self.convnet(inputs)
-        logits = self.heatmap(x)
-        return logits
-
-
 class unet2d(tf.keras.Model):
     def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, seq_len=None, ntm_config=None, attn_config=None, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): 
         super(unet2d, self).__init__(name=name, **kwargs)
@@ -132,7 +118,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
                                activation=self.activation,
                                name='us_%i'%self.layer)
             self.crop = crop_spatial(name='crop_%i'%self.layer)
-            self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2, name='unet_right_%i'%self.layer)
+            self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2, activation=self.activation, name='unet_right_%i'%self.layer)
         else: 
             self.unet_rec = None
             self.ds = None
@@ -177,7 +163,6 @@ class unet(tf.keras.layers.AbstractRNNCell):
         config.update({'num_fmaps':self.num_fmaps, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm_config':self.ntm_config, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
         return config
 
-    @tf.function
     def get_initial_states(self):
         state_l = tf.constant(0.)
         state_r = tf.constant(0.)
@@ -206,7 +191,6 @@ class conv_pass(tf.keras.layers.Layer):
                                         activation=self.activation, 
                                         name=self.name+'_%i'%i) for i in range(self.num_repetitions)]
     
-    @tf.function
     def call(self, inputs):
         for i in range(self.num_repetitions):
             inputs = self.conv[i](inputs)
@@ -223,7 +207,6 @@ class downsample(tf.keras.layers.Layer):
         self.factors = factors
         self.ds = tf.keras.layers.AveragePooling2D(pool_size=self.factors, strides=self.factors, padding='same', data_format='channels_first', name=self.name+'_internal')
     
-    @tf.function
     def call(self, inputs):
         inputs = self.ds(inputs)
         return inputs
@@ -248,7 +231,6 @@ class upsample(tf.keras.layers.Layer):
         #                                     name=self.name)
         self.us = tf.keras.layers.UpSampling2D(size=self.factors, data_format = "channels_first", name=name+'_internal')
     
-    @tf.function
     def call(self, inputs):
         inputs = self.us(inputs)
         return inputs
@@ -262,7 +244,6 @@ class crop_spatial(tf.keras.layers.Layer):
     def __init__(self, name='crop_spatial', **kwargs):
         super(crop_spatial, self).__init__(name=name, **kwargs)
         
-    @tf.function
     def call(self, inputs, shape):
         in_shape = tf.shape(inputs)
         offset = [0,0] + [(in_shape[i] - shape[i]) // 2 for i in range(2, shape.shape[0])]
