@@ -12,10 +12,9 @@ import matplotlib.pyplot as plt
 @tf.function
 def decode_image(file_path):
     img = tf.io.read_file(file_path)
-    img = tf.cast(tf.io.decode_jpeg(img, channels=1), tf.float32)
-    img = tf.scalar_mul(tf.constant(1./255., dtype=tf.float32), img)
-    # img = tf.image.per_image_standardization(img)
-    # img = tf.subtract(tf.scalar_mul(tf.constant(2., dtype=tf.float32), img),tf.constant(1., dtype=tf.float32))
+    img = tf.io.decode_jpeg(img, channels=1)#tf.cast(, tf.float32)
+    img = tf.image.convert_image_dtype(img, tf.float32)
+    img = tf.subtract(tf.scalar_mul(tf.constant(2., dtype=tf.float32), img),tf.constant(1., dtype=tf.float32))
     return img
 
 class Data_Loader():
@@ -52,8 +51,7 @@ class Data_Loader():
             data = self.load_droso()
         imx, imy = im_size
         data = self.resize_images(data, imx, self.orig_im_size[0], self.orig_im_size[1])
-        #data = data.shuffle(buffer_size=self.ds_size, reshuffle_each_iteration=False) #TODO add this for actual runs, 
-        
+                
         # train test val split (take and skip)
         n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
         n_val_obs = int(self.ds_size * (self.val_pct/100.0) - (self.ds_size * (self.val_pct/100.0) % self.batch_size))
@@ -99,7 +97,7 @@ class Data_Loader():
         def _tf_resize(img, lab, fn):
             lab = _rescale_lab(lab, imx, imx)
             keypoints = generate_heatmaps(lab, imx, self.n_landmarks, self.sigma)
-            resized = tf.image.resize(img, [imx,imx]) #TODO correct axis
+            resized = tf.image.resize(img, [imx,imx]) 
             resized = tf.transpose(resized, perm=[2,0,1]) # convert to channels first
             resized.set_shape([1,imx,imx])
             keypoints.set_shape([self.n_landmarks,imx,imx])
@@ -149,9 +147,6 @@ class Data_Loader():
             image_aug = np.transpose(image_aug, (2,0,1))
             image = image_aug[:1]
             keypoints = image_aug[1:]
-            # #keypoints = np.array(transformed['keypoints'],dtype=np.float32)
-            # if(len(image.shape)<3):
-            #     image = np.expand_dims(image,axis=0)
             return image, keypoints
           
 
