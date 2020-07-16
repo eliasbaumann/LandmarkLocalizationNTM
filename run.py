@@ -4,8 +4,13 @@ import time
 import matplotlib.pyplot as plt
 import cv2
 
+os.environ["OMP_NUM_THREADS"]="8"
+
 import numpy as np
 import tensorflow as tf
+
+tf.config.threading.set_inter_op_parallelism_threads(8)
+tf.config.threading.set_intra_op_parallelism_threads(8)
 
 import unet
 import data
