@@ -18,13 +18,13 @@ def decode_image(file_path):
     return img
 
 class Data_Loader():
-    def __init__(self, data_path, name, batch_size, train_pct=80, val_pct=10, test_pct=10, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
+    def __init__(self, data_path, name, batch_size, train_pct=80, test_pct=20, n_folds=3, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
         self.path = data_path
         self.name = name
         self.batch_size = batch_size
         self.train_pct = train_pct
-        self.val_pct = val_pct
         self.test_pct = test_pct
+        self.n_folds = n_folds
         self.repeat = repeat
         self.prefetch = prefetch
         self.n_aug_rounds = n_aug_rounds
@@ -54,13 +54,39 @@ class Data_Loader():
                 
         # train test val split (take and skip)
         n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
-        n_val_obs = int(self.ds_size * (self.val_pct/100.0) - (self.ds_size * (self.val_pct/100.0) % self.batch_size))
+        n_val_obs = n_train_obs // self.n_folds
+        n_train_obs = n_train_obs - n_val_obs
         n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
        
-        self.train_data = data.take(n_train_obs)
-        self.val_data = data.skip(n_train_obs).take(n_val_obs)
+        # if fold = 0
+        # train_1 = take(0*n_val)
+        # train_2 = skip(n_val).take(n_train)
+        # val = skip(0*n_val).take(n_val)
+        # if fold = 1
+        # train_1 = take(n_val)
+        # train_2 = skip(2*n_val).take(n_train-1*n_val)
+        # val = skip(1*n_val).take(n_val)
+        # if fold = 2
+        # train_1 = take(2*n_val)
+        # train_2 = skip(3*n_val).take(n_train-2*n_val)
+        # val = skip(2*n_val).take(n_val)
+        self.data_folds = []
+        for i in range(self.n_folds):
+            j = i+1
+            train_1 = data.take(i*n_val_obs)
+            train_2 = data.skip(j*n_val_obs).take(n_train_obs)
+            train = train_2.concatenate(train_2)
+            val = data.skip(i*n_val_obs).take(n_val_obs)
+            self.data_folds.append([train,val])
+
         self.test_data = data.skip(n_train_obs+n_val_obs).take(n_test_obs)
-       
+        print("setup cv splits")
+        
+    
+    def prep_fold(self, fold):
+        train, val = self.data_folds[fold]
+        self.train_data = train
+        self.val_data = val
         self.train_data = self.augment_data(self.train_data, imx, imy)
 
         if self.keypoints is not None:
@@ -83,7 +109,7 @@ class Data_Loader():
         if self.prefetch:
             self.train_data = self.train_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
             self.val_data = self.val_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-        print("Datasets loaded")
+        print("prepared preprocessing")
   
     def resize_images(self, data, imx, origx, origy):   
         

@@ -1,16 +1,19 @@
-import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_MAX_THREADS"] = "1"
+
+import json
 import time
 import matplotlib.pyplot as plt
 import cv2
 
-os.environ["OMP_NUM_THREADS"]="8"
-
 import numpy as np
 import tensorflow as tf
-
-tf.config.threading.set_inter_op_parallelism_threads(8)
-tf.config.threading.set_intra_op_parallelism_threads(8)
 
 import unet
 import data
@@ -136,9 +139,11 @@ class Train(object):
         lab_keypoints = tf.transpose(self.get_max_indices_argmax(lab), [1,0,2])
         
         img = img.numpy().squeeze() #np.sum(lab.numpy().squeeze(), axis=0)#
+        pred = (pred.numpy().squeeze()+1)/2.
         if len(img.shape)<3: # for batcH_size = 1
             img = np.expand_dims(img, axis=0)
-        pred_logits = np.max((pred.numpy().squeeze()+1)/2., axis=0)
+            pred = np.expand_dims(pred, axis=0)
+        pred_logits = np.max(pred, axis=0)
         # lab_lg_comp = np.max((lab.numpy().squeeze()+1)/2., axis=0)
 
         pred_keypoints = pred_keypoints.numpy()
@@ -348,18 +353,19 @@ def vis_points(image, points, diameter=5, given_kp=None):
             cv2.circle(im, (int(h), int(w)), diameter, (0., 1., 0.), -1)
     plt.imshow(im)
 
-def create_dir(path):
+def create_dir(path, fold):
     previous_runs = [i for i in os.listdir(path) if "run_" in i]
     if len(previous_runs) == 0:
         run_number = 1
     else:
         run_number = max([int(s.split('run_')[1]) for s in previous_runs]) + 1
-    logdir = 'run_%02d' % run_number
+    logdir = 'run_%02d/fold_%02d' % (run_number, fold)
     l_dir = os.path.join(path, logdir)
     os.mkdir(l_dir)
     cp_dir = l_dir +'//cp/cp-{step:04d}'
     return l_dir, cp_dir
 
+# TODO fix when actually considering loading a checkpoint -> for now this just does not work
 def load_dir(path, run_number, step):
     logdir = 'run_%02d' % run_number
     l_dir = os.path.join(path, logdir)
@@ -387,8 +393,8 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
                                name=data_config['dataset'],
                                batch_size=data_config["batch_size"]*strategy.num_replicas_in_sync,
                                train_pct=data_config["train_pct"],
-                               val_pct=data_config["val_pct"],
                                test_pct=data_config["test_pct"],
+                               n_folds=data_config["n_folds"],
                                n_aug_rounds=data_config["n_aug_rounds"],
                                repeat=data_config["repeat"],
                                prefetch=data_config["prefetch"],
@@ -406,38 +412,41 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
         raise ValueError("training_params[\"mode\"] must be either iter or simul")
 
     cp_dir = None
-    if start_steps > 0:
-        if start_steps % training_params["checkpoint_interval"] != 0:
-            start_steps = int(np.round(float(start_steps) / training_params["checkpoint_interval"], 0) * training_params["checkpoint_interval"])
-        log_path, cp_path, cp_dir = load_dir(path, run_number, start_steps)
-        data_config, opti_config, unet_config, ntm_config, training_params = load_parameters(log_path) #this now always overwrites any given params, TODO
-    else:
-        log_path, cp_path = create_dir(path)
+    # TODO make checkpoint loading work again -> todo when you actually get somewhere with this code...
+    # if start_steps > 0:
+    #     if start_steps % training_params["checkpoint_interval"] != 0:
+    #         start_steps = int(np.round(float(start_steps) / training_params["checkpoint_interval"], 0) * training_params["checkpoint_interval"])
+    #     log_path, cp_path, cp_dir = load_dir(path, run_number, start_steps)
+    #     data_config, opti_config, unet_config, ntm_config, training_params = load_parameters(log_path) #this now always overwrites any given params, TODO
+    # else:
+    for fold in range(dataset.n_folds):
+        log_path, cp_path = create_dir(path, fold)
+        dataset.prep_fold(fold)
 
-    if run_number is None:
-        store_parameters(data_config, opti_config, unet_config, ntm_config, attn_config, training_params, log_path)
-    
-    with strategy.scope():
-        model = unet.unet2d(num_fmaps=unet_config["num_filters"],
-                                 fmap_inc_factor=unet_config["fmap_inc_factor"],
-                                 downsample_factors=unet_config["ds_factors"],
-                                 num_landmarks=num_landmarks,
-                                 seq_len=seq_len,
-                                 ntm_config=ntm_config,
-                                 attn_config=attn_config,
-                                 batch_size=data_config["batch_size"],
-                                 im_size=data_config["im_size"]
-                                 )
-
-        if cp_dir is not None:
-            model.load_weights(cp_dir)
+        if run_number is None:
+            store_parameters(data_config, opti_config, unet_config, ntm_config, attn_config, training_params, log_path)
         
-        train_data = strategy.experimental_distribute_dataset(dataset.train_data)
-        val_data = strategy.experimental_distribute_dataset(dataset.val_data)
-        test_data = strategy.experimental_distribute_dataset(dataset.test_data)
+        with strategy.scope():
+            model = unet.unet2d(num_fmaps=unet_config["num_filters"],
+                                    fmap_inc_factor=unet_config["fmap_inc_factor"],
+                                    downsample_factors=unet_config["ds_factors"],
+                                    num_landmarks=num_landmarks,
+                                    seq_len=seq_len,
+                                    ntm_config=ntm_config,
+                                    attn_config=attn_config,
+                                    batch_size=data_config["batch_size"],
+                                    im_size=data_config["im_size"]
+                                    )
 
-        trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, data_landmarks=dataset.n_landmarks, log_path=log_path, cp_path=cp_path)
-        trainer.iter_loop(train=train_data, val=val_data, test=test_data, start_steps=start_steps)
+            if cp_dir is not None:
+                model.load_weights(cp_dir)
+            
+            train_data = strategy.experimental_distribute_dataset(dataset.train_data)
+            val_data = strategy.experimental_distribute_dataset(dataset.val_data)
+            test_data = strategy.experimental_distribute_dataset(dataset.test_data)
+
+            trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, data_landmarks=dataset.n_landmarks, log_path=log_path, cp_path=cp_path)
+            trainer.iter_loop(train=train_data, val=val_data, test=test_data, start_steps=start_steps)
 
 def read_json(path):
     with open(path) as f:
@@ -456,9 +465,9 @@ if __name__ == "__main__":
     sigma: 1., float, size of gaussian blob on heatmap
     lm_count: 5, int8, how many landmarks to put does output layer predict (used for iterative and non iterative loop) #TODO is this true?
     kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task, None or [0] for no input kps -> this is only for non iterative loop
-    train_pct, 10  \\
-    val_pct,   10   | --- int from (0,100], sum cant be > 100, how much of the dataset is train, test, validation set.
-    test_pct,  10   /
+    train_pct, 10, int, percent of total data to take as training set (will be split by N_folds again) 
+    test_pct,  10, int, percent of total data to take as holdout set
+    n_folds, 3, int, how many CV folds
     repeat, true, bool, whether to repeat the dataset infinitely
     prefetch, true, bool, whether to prefetch samples from the tf.data dataset
     n_aug_rounds, 10, int8, How many altered versions of the train dataset to append, i.e. 10 = 10 transformed versions of the same dataset are appended to the original (also transformed) dataset
