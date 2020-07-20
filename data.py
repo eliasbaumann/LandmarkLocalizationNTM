@@ -36,10 +36,15 @@ class Data_Loader():
         self.ds_size = None
         self.keypoints = None
         self.orig_im_size = None
+        self.im_size = None
+        self.n_train_obs = None
+        self.n_val_obs = None
+        self.n_test_obs = None
         self.augmentations = []
         
 
     def __call__(self, im_size=None, keypoints=None):
+        self.im_size = im_size
         print("Creating Datasets...")
         self.keypoints = keypoints
         if self.name == 'droso':
@@ -49,14 +54,14 @@ class Data_Loader():
         else:
             print("No correct dataset name given, please select from droso and cephal, defaulting to droso")
             data = self.load_droso()
-        imx, imy = im_size
+        imx, imy = self.im_size
         data = self.resize_images(data, imx, self.orig_im_size[0], self.orig_im_size[1])
                 
         # train test val split (take and skip)
-        n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
-        n_val_obs = n_train_obs // self.n_folds
-        n_train_obs = n_train_obs - n_val_obs
-        n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
+        self.n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
+        self.n_val_obs = self.n_train_obs // self.n_folds
+        self.n_train_obs = self.n_train_obs - self.n_val_obs
+        self.n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
        
         # if fold = 0
         # train_1 = take(0*n_val)
@@ -73,17 +78,18 @@ class Data_Loader():
         self.data_folds = []
         for i in range(self.n_folds):
             j = i+1
-            train_1 = data.take(i*n_val_obs)
-            train_2 = data.skip(j*n_val_obs).take(n_train_obs)
+            train_1 = data.take(i*self.n_val_obs)
+            train_2 = data.skip(j*self.n_val_obs).take(self.n_train_obs)
             train = train_2.concatenate(train_2)
-            val = data.skip(i*n_val_obs).take(n_val_obs)
-            self.data_folds.append([train,val])
+            val = data.skip(i*self.n_val_obs).take(self.n_val_obs)
+            self.data_folds.append([train, val])
 
-        self.test_data = data.skip(n_train_obs+n_val_obs).take(n_test_obs)
+        self.test_data = data.skip(self.n_train_obs+self.n_val_obs).take(self.n_test_obs)
         print("setup cv splits")
         
     
     def prep_fold(self, fold):
+        imx, imy = self.im_size
         train, val = self.data_folds[fold]
         self.train_data = train
         self.val_data = val
@@ -92,9 +98,9 @@ class Data_Loader():
         if self.keypoints is not None:
             self.train_data, self.val_data, self.test_data = self.kp_to_input(self.train_data, self.val_data, self.test_data, self.keypoints)
         
-        self.train_data = self.train_data.shuffle(buffer_size=n_train_obs, reshuffle_each_iteration=False)
-        self.val_data = self.train_data.shuffle(buffer_size=n_val_obs, reshuffle_each_iteration=False)
-        self.test_data = self.train_data.shuffle(buffer_size=n_test_obs, reshuffle_each_iteration=False)
+        self.train_data = self.train_data.shuffle(buffer_size=self.n_train_obs, reshuffle_each_iteration=False)
+        self.val_data = self.train_data.shuffle(buffer_size=self.n_val_obs, reshuffle_each_iteration=False)
+        self.test_data = self.train_data.shuffle(buffer_size=self.n_test_obs, reshuffle_each_iteration=False)
 
         if self.repeat:
             self.train_data = self.train_data.repeat()
