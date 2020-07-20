@@ -84,7 +84,6 @@ class Train(object):
         return res
 
     def convert_input(self, img, lab, lm, lm_count, iter):
-        # TODO add padding to 20 landmarks for cephal
         if not self.iter:
             inp = tf.expand_dims(img, axis=0)
             lab = tf.expand_dims(lab, axis=0)
@@ -151,7 +150,7 @@ class Train(object):
         if len(img.shape)<3: # for batcH_size = 1
             img = np.expand_dims(img, axis=0)
             pred = np.expand_dims(pred, axis=0)
-        pred_logits = np.max(pred, axis=0)
+        pred_logits = np.max(pred, axis=1)
         # lab_lg_comp = np.max((lab.numpy().squeeze()+1)/2., axis=0)
 
         pred_keypoints = pred_keypoints.numpy()
@@ -230,38 +229,45 @@ class Train(object):
         pr_loss, pr_kp_loss, pr_c_dist, pr_wm, pr_ctgt = self.strategy.experimental_run_v2(self.test_step, args=(inp, lab, fn, ))
         return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=None)
 
-    def val_store(self, step, elapsed_time, t_mean, tl_mean, tcd_mean, v_mean, vl_mean, vcd_mean, mrg_mean, cgt_mean):
+    def val_store(self, step, elapsed_time, t, tl, tcd, v, vl, vcd, mrg, cgt):
         tf.print("Iteration", step , "(Elapsed: ", elapsed_time, "s):")
-        tf.print("mean train loss since last validation:", t_mean, summarize=-1)
+        tf.print("mean train loss since last validation:", t[0], "std:", t[1], summarize=-1)
         with open(os.path.join(self.log_path, 'train_loss.txt'), 'ab') as tltxt:
-            np.savetxt(tltxt, [np.array(t_mean)], fmt='%.3f', delimiter=",")
+            np.savetxt(tltxt, [np.array(t[0])], fmt='%.3f', delimiter=",")
+            np.savetxt(tltxt, [np.array(t[1])], fmt='%.3f', delimiter=",")
 
-        tf.print("train loss per kp (ssd): ", tl_mean, summarize=-1)
+        #tf.print("train loss per kp (ssd): ", tl[0], summarize=-1)
         with open(os.path.join(self.log_path, 'train_loss_kp.txt'), 'ab') as tlkptxt:
-            np.savetxt(tlkptxt, [np.array(tl_mean)], fmt='%.3f', delimiter=",")
-        tf.print("train coordinate distance: ", tcd_mean, summarize=-1)
+            np.savetxt(tlkptxt, [np.array(tl[0])], fmt='%.3f', delimiter=",")
+            np.savetxt(tlkptxt, [np.array(tl[1])], fmt='%.3f', delimiter=",")
+        #tf.print("train coordinate distance: ", tcd[0], summarize=-1)
         with open(os.path.join(self.log_path, 'train_coordd.txt'), 'ab') as tcdtxt:
-            np.savetxt(tcdtxt, [np.array(tcd_mean)], fmt='%.3f', delimiter=",")
+            np.savetxt(tcdtxt, [np.array(tcd[0])], fmt='%.3f', delimiter=",")
+            np.savetxt(tcdtxt, [np.array(tcd[1])], fmt='%.3f', delimiter=",")
         
-        tf.print("mean validation loss:", v_mean, summarize=-1)
+        tf.print("mean validation loss:", v[0], "std:", v[1], summarize=-1)
         with open(os.path.join(self.log_path, 'val_loss.txt'), 'ab') as vltxt:
-            np.savetxt(vltxt, [np.array(v_mean)], fmt='%.3f', delimiter=",")
+            np.savetxt(vltxt, [np.array(v[0])], fmt='%.3f', delimiter=",")
+            np.savetxt(vltxt, [np.array(v[1])], fmt='%.3f', delimiter=",")
 
-        tf.print("validation loss per kp (ssd): ", vl_mean, summarize=-1)
+        #tf.print("validation loss per kp (ssd): ", vl[0], summarize=-1)
         with open(os.path.join(self.log_path, 'val_loss_kp.txt'), 'ab') as vlkptxt:
-            np.savetxt(vlkptxt, [np.array(vl_mean)], fmt='%.3f', delimiter=",")
-        tf.print("validation coordinate distance: ", vcd_mean, summarize=-1)
+            np.savetxt(vlkptxt, [np.array(vl[0])], fmt='%.3f', delimiter=",")
+            np.savetxt(vlkptxt, [np.array(vl[1])], fmt='%.3f', delimiter=",")
+        #tf.print("validation coordinate distance: ", vcd[0], summarize=-1)
         with open(os.path.join(self.log_path, 'val_coordd.txt'), 'ab') as vcdtxt:
-            np.savetxt(vcdtxt, [np.array(vcd_mean)], fmt='%.3f', delimiter=",")
+            np.savetxt(vcdtxt, [np.array(vcd[0])], fmt='%.3f', delimiter=",")
+            np.savetxt(vcdtxt, [np.array(vcd[1])], fmt='%.3f', delimiter=",")
 
-        tf.print("% within margin: ", mrg_mean, summarize=-1)
+        #tf.print("% within margin: ", mrg[0], summarize=-1)
         with open(os.path.join(self.log_path, 'vaL_within_margin.txt'), 'ab') as mrgtxt:
-            np.savetxt(mrgtxt, [np.array(mrg_mean)], fmt='%3.3f', delimiter=",")
-        mrgtxt.close()
-        tf.print("% closest to gt", cgt_mean, summarize=-1)
+            np.savetxt(mrgtxt, [np.array(mrg[0])], fmt='%3.3f', delimiter=",")
+            np.savetxt(mrgtxt, [np.array(mrg[1])], fmt='%3.3f', delimiter=",")
+
+        #tf.print("% closest to gt", cgt[0], summarize=-1)
         with open(os.path.join(self.log_path, 'val_closest_gt.txt'), 'ab') as cgttxt:
-            np.savetxt(cgttxt, [np.array(cgt_mean)], fmt='%3.3f', delimiter=",")
-        cgttxt.close()
+            np.savetxt(cgttxt, [np.array(cgt[0])], fmt='%3.3f', delimiter=",")
+            np.savetxt(cgttxt, [np.array(cgt[1])], fmt='%3.3f', delimiter=",")
 
     def iter_loop(self, train, val, test, start_steps):
         train = iter(train)
@@ -299,17 +305,35 @@ class Train(object):
                     val_coord_dist_lm.append([v_c_dist])
 
                 t_mean = tf.reduce_mean(train_loss)
-                v_mean = tf.reduce_mean(val_loss)
+                t_std = tf.math.reduce_std(train_loss)
                 tl_mean = tf.squeeze(tf.reduce_mean(train_loss_lm, axis=0))
+                tl_std = tf.squeeze(tf.math.reduce_std(train_loss_lm, axis=0))
                 tcd_mean = tf.squeeze(tf.reduce_mean(train_coord_dist_lm, axis=0))
+                tcd_std = tf.squeeze(tf.math.reduce_std(train_coord_dist_lm, axis=0))
+
+                v_mean = tf.reduce_mean(val_loss)
+                v_std = tf.math.reduce_std(val_loss)
                 vl_mean = tf.squeeze(tf.reduce_mean(val_loss_lm, axis=0))
+                vl_std = tf.squeeze(tf.math.reduce_std(val_loss_lm, axis=0))
                 vcd_mean = tf.squeeze(tf.reduce_mean(val_coord_dist_lm, axis=0))
+                vcd_std = tf.squeeze(tf.math.reduce_std(val_coord_dist_lm, axis=0))
                 mrg_mean = tf.squeeze(tf.reduce_mean(mrg_lm, axis=0))
+                mrg_std = tf.squeeze(tf.math.reduce_std(mrg_lm, axis=0))
                 cgt_mean = tf.squeeze(tf.reduce_mean(cgt_lm, axis=0))
+                cgt_std = tf.squeeze(tf.math.reduce_std(cgt_lm, axis=0))
                 
                 elapsed_time = int(time.time() - start_time)
 
-                self.val_store(step, elapsed_time, t_mean, tl_mean, tcd_mean, v_mean, vl_mean, vcd_mean, mrg_mean, cgt_mean)
+                self.val_store(step,
+                               elapsed_time,
+                               (t_mean, t_std), 
+                               (tl_mean, tl_std), 
+                               (tcd_mean, tcd_std),
+                               (v_mean, v_std),
+                               (vl_mean, vl_std),
+                               (vcd_mean, vcd_std),
+                               (mrg_mean, mrg_std),
+                               (cgt_mean, cgt_std))
                 
 
                 train_loss =[]
@@ -342,11 +366,13 @@ class Train(object):
             test_cgt.append(t_closest_to_gt)
         
         test_res = [np.array(tf.squeeze(tf.reduce_mean(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
+        test_std = [np.array(tf.squeeze(tf.math.reduce_std(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
         total_time = int(time.time() - start_time)
         test_res.append([total_time])
         with open(os.path.join(self.log_path, 'test_res.txt'), 'ab') as testtxt:
-            for i in test_res:
-                np.savetxt(testtxt, [i], fmt='%3.3f', delimiter=",")
+            for i in range(len(test_res)):
+                np.savetxt(testtxt, [test_res[i]], fmt='%3.3f', delimiter=",")
+                np.savetxt(testtxt, [test_std[i]], fmt='%3.3f', delimiter=",")
         testtxt.close()
 
 
@@ -363,10 +389,13 @@ def vis_points(image, points, diameter=5, given_kp=None):
 
 def create_dir(path, fold):
     previous_runs = [i for i in os.listdir(path) if "run_" in i]
-    if len(previous_runs) == 0:
-        run_number = 1
+    if fold != 0:
+        run_number = max([int(s.split('run_')[1]) for s in previous_runs])
     else:
-        run_number = max([int(s.split('run_')[1]) for s in previous_runs]) + 1
+        if len(previous_runs) == 0:
+            run_number = 1
+        else:
+            run_number = max([int(s.split('run_')[1]) for s in previous_runs]) + 1
     logdir = 'run_%02d/fold_%02d' % (run_number, fold)
     l_dir = os.path.join(path, logdir)
     os.makedirs(l_dir)
