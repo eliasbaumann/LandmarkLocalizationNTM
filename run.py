@@ -1,11 +1,5 @@
 import os
-
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_MAX_THREADS"] = "1"
+import argparse
 
 import json
 import time
@@ -17,6 +11,20 @@ import tensorflow as tf
 
 import unet
 import data
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_MAX_THREADS"] = "1"
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="4,5,6,7"
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--conf', type=str, default=None, help='Select a directory in which to search for config.json to execute')
+args = parser.parse_args()
+
 # tf.config.experimental_run_functions_eagerly(True)
 
 class Train(object):
@@ -361,7 +369,7 @@ def create_dir(path, fold):
         run_number = max([int(s.split('run_')[1]) for s in previous_runs]) + 1
     logdir = 'run_%02d/fold_%02d' % (run_number, fold)
     l_dir = os.path.join(path, logdir)
-    os.mkdir(l_dir)
+    os.makedirs(l_dir)
     cp_dir = l_dir +'//cp/cp-{step:04d}'
     return l_dir, cp_dir
 
@@ -519,6 +527,9 @@ if __name__ == "__main__":
     '''
     PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' # can define this explicitely to be an experiment folder to re-run select experiments
     DATA_DIR = '/fast/AG_Kainmueller/elbauma/landmark-ntm/datasets/'
+
+    if args.conf is not None:
+        PATH = args.conf
 
     path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('config.json')] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:
