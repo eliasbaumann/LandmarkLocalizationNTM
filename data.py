@@ -59,7 +59,7 @@ class Data_Loader():
                 
         # train test val split (take and skip)
         self.n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
-        self.n_val_obs = self.n_train_obs // self.n_folds
+        self.n_val_obs = self.n_train_obs // self.n_folds if self.n_folds > 1 else self.n_train_obs // 5 # just do 20% of train for no n_folds defined
         self.n_train_obs = self.n_train_obs - self.n_val_obs
         self.n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
        
