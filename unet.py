@@ -3,9 +3,10 @@ from enc_dec import Encoder_Decoder_Wrapper
 from attention import AttentionGate
 
 class unet2d(tf.keras.Model):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, num_landmarks, seq_len=None, ntm_config=None, attn_config=None, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): 
+    def __init__(self, num_fmaps, kernel_size, fmap_inc_factor, downsample_factors, num_landmarks, seq_len=None, ntm_config=None, attn_config=None, batch_size=None, training=None, im_size=[256, 256], name='unet2d', **kwargs): 
         super(unet2d, self).__init__(name=name, **kwargs)
         self.num_fmaps = num_fmaps
+        self.kernel_size = kernel_size
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
         self.num_landmarks = num_landmarks
@@ -15,8 +16,8 @@ class unet2d(tf.keras.Model):
         self.training = training
         self.im_size = im_size
         self.seq_len = seq_len
-        self.unet_rec = unet(self.num_fmaps, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, attn_config=self.attn_config, batch_size=self.batch_size, im_size=self.im_size)
-        self.logits = conv_pass(1, self.num_landmarks, 1, activation=tf.keras.activations.tanh) #, payer et al do no activation
+        self.unet_rec = unet(self.num_fmaps, self.kernel_size, self.fmap_inc_factor, self.downsample_factors, ntm_config=self.ntm_config, attn_config=self.attn_config, batch_size=self.batch_size, im_size=self.im_size)
+        self.logits = conv_pass(1, self.num_landmarks, 1, activation=None) #, payer et al do no activation
 
     def call(self, inputs, training=True):
         states = self.setup_states()
@@ -59,9 +60,10 @@ class unet2d(tf.keras.Model):
 
 
 class unet(tf.keras.layers.AbstractRNNCell):
-    def __init__(self, num_fmaps, fmap_inc_factor, downsample_factors, ntm_config=None, attn_config=None, batch_size=None, activation=tf.nn.leaky_relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
+    def __init__(self, num_fmaps, kernel_size, fmap_inc_factor, downsample_factors, ntm_config=None, attn_config=None, batch_size=None, activation=tf.nn.leaky_relu, layer=0, im_size=[256, 256], name='unet', **kwargs):
         super(unet, self).__init__(name=name+'_'+str(layer), **kwargs)
         self.num_fmaps = num_fmaps
+        self.kernel_size = kernel_size
         self.fmap_inc_factor = fmap_inc_factor
         self.downsample_factors = downsample_factors
         self.ntm_config = ntm_config
@@ -70,7 +72,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
         self.activation = activation
         self.layer = layer
         self.im_size = im_size
-        self.inp_conv = conv_pass(kernel_size=3,
+        self.inp_conv = conv_pass(kernel_size=self.kernel_size,
                                   num_fmaps=self.num_fmaps,
                                   num_repetitions=2,
                                   activation=self.activation,
@@ -104,6 +106,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
 
         if self.layer < len(self.downsample_factors):
             self.unet_rec = unet(num_fmaps=self.num_fmaps*self.fmap_inc_factor,
+                                 kernel_size=self.kernel_size,
                                  fmap_inc_factor=self.fmap_inc_factor,
                                  downsample_factors=self.downsample_factors,
                                  ntm_config=self.ntm_config,
@@ -116,7 +119,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
             self.us = upsample(factors=self.downsample_factors[self.layer],
                                name='us_%i'%self.layer)
             self.crop = crop_spatial(name='crop_%i'%self.layer)
-            self.out_conv = conv_pass(kernel_size=3, num_fmaps=self.num_fmaps, num_repetitions=2, activation=self.activation, name='unet_right_%i'%self.layer)
+            self.out_conv = conv_pass(kernel_size=self.kernel_size, num_fmaps=self.num_fmaps, num_repetitions=2, activation=self.activation, name='unet_right_%i'%self.layer)
         else: 
             self.unet_rec = None
             self.ds = None
@@ -158,7 +161,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
 
     def get_config(self):
         config = super(unet, self).get_config()
-        config.update({'num_fmaps':self.num_fmaps, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm_config':self.ntm_config, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
+        config.update({'num_fmaps':self.num_fmaps, 'kernel_size':self.kernel_size, 'fmap_inc_factor':self.fmap_inc_factor, 'downsample_factors':self.downsample_factors, 'ntm_config':self.ntm_config, 'batch_size':self.batch_size, 'activation':self.activation, 'layer':self.layer})
         return config
 
     def get_initial_states(self):

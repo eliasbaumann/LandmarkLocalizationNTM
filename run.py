@@ -19,7 +19,8 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_MAX_THREADS"] = "1"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="4,5,6,7"
+
+#os.environ["CUDA_VISIBLE_DEVICES"]="4,5,6,7"
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--conf', type=str, default=None, help='Select a directory in which to search for config.json to execute')
@@ -140,13 +141,17 @@ class Train(object):
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
         self.store_samples(img, pred, lab, filenames, given_kp, states, attn_maps)
         return loss, kp_loss, c_dist, within_margin, closest_to_gt
+    
+    def min_max_scale(self, inp):
+        return (inp-inp.min())/(inp.max()-inp.min())
 
     def store_samples(self, img, pred, lab, filenames, given_kp = None, states=None, attn_maps=None):
         pred_keypoints = tf.transpose(self.get_max_indices_argmax(pred), [1,0,2])
         lab_keypoints = tf.transpose(self.get_max_indices_argmax(lab), [1,0,2])
         
         img = img.numpy().squeeze() #np.sum(lab.numpy().squeeze(), axis=0)#
-        pred = (pred.numpy().squeeze()+1)/2.
+        pred = self.min_max_scale(pred.numpy().squeeze())
+        
         if len(img.shape)<3: # for batcH_size = 1
             img = np.expand_dims(img, axis=0)
             pred = np.expand_dims(pred, axis=0)
@@ -368,12 +373,11 @@ class Train(object):
         test_res = [np.array(tf.squeeze(tf.reduce_mean(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
         test_std = [np.array(tf.squeeze(tf.math.reduce_std(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
         total_time = int(time.time() - start_time)
-        test_res.append([total_time])
         with open(os.path.join(self.log_path, 'test_res.txt'), 'ab') as testtxt:
             for i in range(len(test_res)):
                 np.savetxt(testtxt, [test_res[i]], fmt='%3.3f', delimiter=",")
                 np.savetxt(testtxt, [test_std[i]], fmt='%3.3f', delimiter=",")
-        testtxt.close()
+            np.savetxt(testtxt, [total_time], fmt='%3.3f', delimiter=",")
 
 
 def vis_points(image, points, diameter=5, given_kp=None):
@@ -465,15 +469,16 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
         
         with strategy.scope():
             model = unet.unet2d(num_fmaps=unet_config["num_filters"],
-                                    fmap_inc_factor=unet_config["fmap_inc_factor"],
-                                    downsample_factors=unet_config["ds_factors"],
-                                    num_landmarks=num_landmarks,
-                                    seq_len=seq_len,
-                                    ntm_config=ntm_config,
-                                    attn_config=attn_config,
-                                    batch_size=data_config["batch_size"],
-                                    im_size=data_config["im_size"]
-                                    )
+                                kernel_size=unet_config["kernel_size"],
+                                fmap_inc_factor=unet_config["fmap_inc_factor"],
+                                downsample_factors=unet_config["ds_factors"],
+                                num_landmarks=num_landmarks,
+                                seq_len=seq_len,
+                                ntm_config=ntm_config,
+                                attn_config=attn_config,
+                                batch_size=data_config["batch_size"],
+                                im_size=data_config["im_size"]
+                                )
 
             if cp_dir is not None:
                 model.load_weights(cp_dir)
@@ -519,6 +524,7 @@ if __name__ == "__main__":
 
     #### unet_config
     num_filters, 16, int, number of filters on first layer of Unet
+    kernel_size, 3, int, kernel size for all convolutional layers (future maybe list)
     fmap_inc_factor, 2, int, multiplier on how much to increase number of filters at each level
     ds_factors, [[2,2],[2,2],[2,2],[2,2],[2,2]], list of int tuples, defines depth of Unet, also defines how much is downsampled at each depth step
 
@@ -553,6 +559,7 @@ if __name__ == "__main__":
     checkpoint_interval, 500, int, number of steps at which a model checkpoints happens, -> can only be used to reuse model for predictions, not to resume training, because no way to ensure data consistency currently
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
     mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously (or with kp_list_in input landmarks)
+    num_gpu, 4, int, number of gpus to use
     '''
     PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' # can define this explicitely to be an experiment folder to re-run select experiments
     DATA_DIR = '/fast/AG_Kainmueller/elbauma/landmark-ntm/datasets/'
