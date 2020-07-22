@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 @tf.function
 def decode_image(file_path):
     img = tf.io.read_file(file_path)
-    img = tf.io.decode_jpeg(img, channels=1)#tf.cast(, tf.float32)
+    img = tf.io.decode_image(img, channels=1)#tf.cast(, tf.float32)
     img = tf.image.convert_image_dtype(img, tf.float32)
     img = tf.subtract(tf.scalar_mul(tf.constant(2., dtype=tf.float32), img),tf.constant(1., dtype=tf.float32))
     return img
@@ -245,10 +245,10 @@ class Data_Loader():
 
     def load_droso(self):
         self.n_landmarks = 40
-        self.ds_size = 471 # TODO change when full data available
+        self.ds_size = 712
         self.orig_im_size = tf.constant([3840,3234])
         data_dir = pathlib.Path(self.path+self.name+'/images/')
-        list_im = tf.data.Dataset.list_files(str(data_dir)+'*/*.jpg')
+        list_im = tf.data.Dataset.list_files(str(data_dir)+'*/*')
 
         @tf.function
         def process_path(file_path):
