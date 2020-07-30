@@ -80,7 +80,7 @@ class Data_Loader():
             j = i+1
             train_1 = data.take(i*self.n_val_obs)
             train_2 = data.skip(j*self.n_val_obs).take(self.n_train_obs)
-            train = train_2.concatenate(train_2)
+            train = train_1.concatenate(train_2)
             val = data.skip(i*self.n_val_obs).take(self.n_val_obs)
             self.data_folds.append([train, val])
 
@@ -99,8 +99,8 @@ class Data_Loader():
             self.train_data, self.val_data, self.test_data = self.kp_to_input(self.train_data, self.val_data, self.test_data, self.keypoints)
         
         self.train_data = self.train_data.shuffle(buffer_size=self.n_train_obs, reshuffle_each_iteration=False)
-        self.val_data = self.train_data.shuffle(buffer_size=self.n_val_obs, reshuffle_each_iteration=False)
-        self.test_data = self.train_data.shuffle(buffer_size=self.n_test_obs, reshuffle_each_iteration=False)
+        self.val_data = self.val_data.shuffle(buffer_size=self.n_val_obs, reshuffle_each_iteration=False)
+        self.test_data = self.test_data.shuffle(buffer_size=self.n_test_obs, reshuffle_each_iteration=False)
 
         if self.repeat:
             self.train_data = self.train_data.repeat()
