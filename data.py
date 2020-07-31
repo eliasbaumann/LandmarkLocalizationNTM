@@ -41,6 +41,7 @@ class Data_Loader():
         self.n_val_obs = None
         self.n_test_obs = None
         self.augmentations = []
+        self.data_folds = []
         
 
     def __call__(self, im_size=None, keypoints=None):
@@ -75,24 +76,25 @@ class Data_Loader():
         # train_1 = take(2*n_val)
         # train_2 = skip(3*n_val).take(n_train-2*n_val)
         # val = skip(2*n_val).take(n_val)
-        self.data_folds = []
+        test = data.skip(self.n_train_obs+self.n_val_obs).take(self.n_test_obs)
+        
         for i in range(self.n_folds):
             j = i+1
             train_1 = data.take(i*self.n_val_obs)
             train_2 = data.skip(j*self.n_val_obs).take(self.n_train_obs)
             train = train_1.concatenate(train_2)
             val = data.skip(i*self.n_val_obs).take(self.n_val_obs)
-            self.data_folds.append([train, val])
+            self.data_folds.append((train, val, test))
 
-        self.test_data = data.skip(self.n_train_obs+self.n_val_obs).take(self.n_test_obs)
+        # self.test_data = data.skip(self.n_train_obs+self.n_val_obs).take(self.n_test_obs)
         print("setup cv splits")
         
     
     def prep_fold(self, fold):
         imx, imy = self.im_size
-        train, val = self.data_folds[fold]
-        self.train_data = train
-        self.val_data = val
+        self.train_data, self.val_data, self.test_data = self.data_folds[fold]
+        # self.train_data = train
+        # self.val_data = val
         self.train_data = self.augment_data(self.train_data, imx, imy)
 
         if self.keypoints is not None:

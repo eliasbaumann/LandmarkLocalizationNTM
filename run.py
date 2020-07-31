@@ -20,7 +20,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_MAX_THREADS"] = "1"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
-#os.environ["CUDA_VISIBLE_DEVICES"]="4,5,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"]="4,5,6,7"
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--conf', type=str, default=None, help='Select a directory in which to search for config.json to execute')
@@ -130,6 +130,8 @@ class Train(object):
     def test_step(self, inp, lab, fn):
         inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
         img = inp[0,:,:1,:,:]
+        tf.print(fn)
+        print(fn)
         filenames = [i.decode('UTF-8') for i in fn.numpy()]
         if not (self.data_config["kp_list_in"] is None or self.data_config["kp_list_in"] == [0]):
             given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"], self.im_size[0], self.im_size[0]]), axis=2)
