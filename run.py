@@ -52,6 +52,7 @@ class Train(object):
         self.log_path = log_path
         self.cp_path = cp_path
         self.iter = True if training_params["mode"]=="iter" else False
+        self.print_samples = True if training_params["store_samples"]==1 else False
 
     def dist_ssd_loss(self, gt_labels, logits):
         return tf.reduce_sum(tf.square(gt_labels-logits), axis=None)
@@ -133,22 +134,25 @@ class Train(object):
         img = inp[0,:,:1,:,:]
         tf.print(fn)
         print(fn)
-        filenames = [i.decode('UTF-8') for i in fn.numpy()]
+        
         if not (self.data_config["kp_list_in"] is None or self.data_config["kp_list_in"] == [0]):
             given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"], self.im_size[0], self.im_size[0]]), axis=2)
         else:
-            given_kp = None
+            given_kp = tf.constant(0.)
         pred, states, attn_maps = self.model.pred_test(inp, training=False) if self.iter else self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
-        self.store_samples(img, pred, lab, filenames, given_kp, states, attn_maps)
+        if self.print_samples:
+            tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp, states, attn_maps], Tout=[])
+        # self.store_samples(img, pred, lab, fn, given_kp, states, attn_maps)
         return loss, kp_loss, c_dist, within_margin, closest_to_gt
     
     def min_max_scale(self, inp):
         return (inp-inp.min())/(inp.max()-inp.min())
 
     def store_samples(self, img, pred, lab, filenames, given_kp = None, states=None, attn_maps=None):
+        filenames = [i.decode('UTF-8') for i in filenames.numpy()]
         pred_keypoints = tf.transpose(self.get_max_indices_argmax(pred), [1,0,2])
         lab_keypoints = tf.transpose(self.get_max_indices_argmax(lab), [1,0,2])
         
@@ -165,7 +169,7 @@ class Train(object):
         lab_keypoints = lab_keypoints.numpy()
         if not os.path.exists(self.log_path+'/samples/'):
             os.makedirs(self.log_path+'/samples/')
-        if given_kp is not None:
+        if given_kp.numpy()!=0.:
             given_kp = tf.transpose(self.get_max_indices_argmax(given_kp), [1,0,2]).numpy()
         else:
             given_kp = np.repeat(None, img.shape[0])
@@ -233,6 +237,7 @@ class Train(object):
         pr_loss, pr_kp_loss, pr_c_dist, pr_wm, pr_ctgt = self.strategy.experimental_run_v2(self.val_step, args=(inp, lab,))
         return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=None)
     
+    @tf.function
     def distributed_test_step(self, inp, lab, fn):
         pr_loss, pr_kp_loss, pr_c_dist, pr_wm, pr_ctgt = self.strategy.experimental_run_v2(self.test_step, args=(inp, lab, fn, ))
         return self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_wm, axis=None),self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_ctgt, axis=None)
@@ -364,7 +369,7 @@ class Train(object):
         test_c_dist = []
         test_mrg = []
         test_cgt = []
-        for _ in range(self.dataset_test_size):
+        for _ in range(self.dataset_test_size // self.strategy.num_replicas_in_sync):
             img_t, lab_t, fn = next(test)
             t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(img_t, lab_t, fn)
             test_loss.append(t_loss)
@@ -560,6 +565,7 @@ if __name__ == "__main__":
     checkpoint_interval, 500, int, number of steps at which a model checkpoints happens, -> can only be used to reuse model for predictions, not to resume training, because no way to ensure data consistency currently
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
     mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously (or with kp_list_in input landmarks)
+    store_samples, 1 for True anything else for false, int, defines if samples are being stored at test time
     num_gpu, 4, int, number of gpus to use
     '''
     PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' # can define this explicitely to be an experiment folder to re-run select experiments
