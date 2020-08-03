@@ -29,7 +29,7 @@ args = parser.parse_args()
 # tf.config.experimental_run_functions_eagerly(True)
 
 class Train(object):
-    def __init__(self, model, strategy, data_config, opti_config, training_params, data_landmarks, log_path, cp_path):
+    def __init__(self, model, strategy, data_config, opti_config, training_params, data_landmarks, dataset_test_size, log_path, cp_path):
         self.model = model
         self.strategy = strategy
         lr_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=opti_config["learning_rate"],
@@ -48,6 +48,7 @@ class Train(object):
         self.opti_config = opti_config
         self.training_params = training_params
         self.data_landmarks = data_landmarks
+        self.dataset_test_size = dataset_test_size
         self.log_path = log_path
         self.cp_path = cp_path
         self.iter = True if training_params["mode"]=="iter" else False
@@ -363,7 +364,7 @@ class Train(object):
         test_c_dist = []
         test_mrg = []
         test_cgt = []
-        for _ in range(training_params["num_test_samples"]):
+        for _ in range(self.dataset_test_size):
             img_t, lab_t, fn = next(test)
             t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(img_t, lab_t, fn)
             test_loss.append(t_loss)
@@ -436,7 +437,6 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
                                name=data_config['dataset'],
                                batch_size=data_config["batch_size"]*strategy.num_replicas_in_sync,
                                train_pct=data_config["train_pct"],
-                               test_pct=data_config["test_pct"],
                                n_folds=data_config["n_folds"],
                                n_aug_rounds=data_config["n_aug_rounds"],
                                repeat=data_config["repeat"],
@@ -489,7 +489,7 @@ def main(path, data_dir, data_config, opti_config, unet_config, ntm_config, attn
             val_data = strategy.experimental_distribute_dataset(dataset.val_data)
             test_data = strategy.experimental_distribute_dataset(dataset.test_data)
 
-            trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, data_landmarks=dataset.n_landmarks, log_path=log_path, cp_path=cp_path)
+            trainer = Train(model=model, strategy=strategy, data_config=data_config, opti_config=opti_config, training_params=training_params, data_landmarks=dataset.n_landmarks, dataset_test_size=dataset.test_size, log_path=log_path, cp_path=cp_path)
             trainer.iter_loop(train=train_data, val=val_data, test=test_data, start_steps=start_steps)
 
 def read_json(path):
@@ -510,7 +510,6 @@ if __name__ == "__main__":
     lm_count: 5, int8, how many landmarks to put does output layer predict (used for iterative and non iterative loop) #TODO is this true?
     kp_list_in: [0,1,3,5], list of int8, which landmarks to put into input for non-iterative learning task, None or [0] for no input kps -> this is only for non iterative loop
     train_pct, 10, int, percent of total data to take as training set (will be split by N_folds again) 
-    test_pct,  10, int, percent of total data to take as holdout set
     n_folds, 3, int, how many CV folds
     repeat, true, bool, whether to repeat the dataset infinitely
     prefetch, true, bool, whether to prefetch samples from the tf.data dataset

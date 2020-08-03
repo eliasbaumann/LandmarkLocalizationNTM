@@ -18,17 +18,17 @@ def decode_image(file_path):
     return img
 
 class Data_Loader():
-    def __init__(self, data_path, name, batch_size, train_pct=80, test_pct=20, n_folds=3, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
+    def __init__(self, data_path, name, batch_size, train_pct=80,  n_folds=3, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
         self.path = data_path
         self.name = name
         self.batch_size = batch_size
         self.train_pct = train_pct
-        self.test_pct = test_pct
         self.n_folds = n_folds
         self.repeat = repeat
         self.prefetch = prefetch
         self.n_aug_rounds = n_aug_rounds
         self.sigma = sigma
+        self.complete_train = None
         self.train_data = None
         self.val_data = None
         self.test_data = None
@@ -37,86 +37,92 @@ class Data_Loader():
         self.keypoints = None
         self.orig_im_size = None
         self.im_size = None
-        self.n_train_obs = None
-        self.n_val_obs = None
-        self.n_test_obs = None
+        self.train_size = None
+        self.val_size = None
+        self.test_size = None
         self.augmentations = []
         self.data_folds = []
         
 
     def __call__(self, im_size=None, keypoints=None):
         self.im_size = im_size
+
+
         print("Creating Datasets...")
         self.keypoints = keypoints
         if self.name == 'droso':
-            data = self.load_droso()
+            train, test = self.load_droso()
         elif self.name == 'cephal':
-            data = self.load_cephal()
+            train, test = self.load_cephal()
         else:
             print("No correct dataset name given, please select from droso and cephal, defaulting to droso")
-            data = self.load_droso()
+            train, test = self.load_droso()
         imx, imy = self.im_size
-        data = self.resize_images(data, imx, self.orig_im_size[0], self.orig_im_size[1])
-                
-        # train test val split (take and skip)
-        self.n_train_obs = int(self.ds_size * (self.train_pct/100.0) - (self.ds_size * (self.train_pct/100.0) % self.batch_size))
-        self.n_val_obs = self.n_train_obs // self.n_folds if self.n_folds > 1 else self.n_train_obs // 5 # just do 20% of train for no n_folds defined
-        self.n_train_obs = self.n_train_obs - self.n_val_obs
-        self.n_test_obs = int(self.ds_size * (self.test_pct/100.0) - (self.ds_size * (self.test_pct/100.0) % self.batch_size))
-       
-        # if fold = 0
-        # train_1 = take(0*n_val)
-        # train_2 = skip(n_val).take(n_train)
-        # val = skip(0*n_val).take(n_val)
-        # if fold = 1
-        # train_1 = take(n_val)
-        # train_2 = skip(2*n_val).take(n_train-1*n_val)
-        # val = skip(1*n_val).take(n_val)
-        # if fold = 2
-        # train_1 = take(2*n_val)
-        # train_2 = skip(3*n_val).take(n_train-2*n_val)
-        # val = skip(2*n_val).take(n_val)
-        test = data.skip(self.n_train_obs+self.n_val_obs).take(self.n_test_obs)
-        
-        for i in range(self.n_folds):
-            j = i+1
-            train_1 = data.take(i*self.n_val_obs)
-            train_2 = data.skip(j*self.n_val_obs).take(self.n_train_obs)
-            train = train_1.concatenate(train_2)
-            val = data.skip(i*self.n_val_obs).take(self.n_val_obs)
-            self.data_folds.append((train, val, test))
+        train = self.resize_images(train, imx, self.orig_im_size[0], self.orig_im_size[1])
+        test = self.resize_images(test, imx, self.orig_im_size[0], self.orig_im_size[1])
 
-        # self.test_data = data.skip(self.n_train_obs+self.n_val_obs).take(self.n_test_obs)
-        print("setup cv splits")
-        
+        train = train.cache().shuffle(self.train_size, reshuffle_each_iteration=False)
+        test = test.cache().shuffle(self.test_size, reshuffle_each_iteration=False)
+        self.val_size = self.train_size // self.n_folds 
+        self.complete_train = train
+        self.test_data = self.prepare_pipeline(test, self.test_size)   
     
+    def prepare_pipeline(self, data, size):
+        if self.keypoints is not None:
+            data = self.kp_to_input(data, self.keypoints)
+        data = data.shuffle(size)
+        if self.repeat:
+            data = data.repeat()
+        data = data.batch(self.batch_size, drop_remainder=True)
+        if self.prefetch:
+            data = data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+        return data
+
     def prep_fold(self, fold):
         imx, imy = self.im_size
-        self.train_data, self.val_data, self.test_data = self.data_folds[fold]
-        # self.train_data = train
-        # self.val_data = val
-        self.train_data = self.augment_data(self.train_data, imx, imy)
-
-        if self.keypoints is not None:
-            self.train_data, self.val_data, self.test_data = self.kp_to_input(self.train_data, self.val_data, self.test_data, self.keypoints)
+        # cross validation via shards is probably not the best idea, but we'll do it anyways :)
+        if self.n_folds <=1:
+            self.val_data = self.test_data
+            self.train_data = self.augment_data(self.complete_train, imx, imy)
+            self.train_data = self.prepare_pipeline(self.train_data, self.train_size)
+        # else:
+        #     train_1 = self.complete_train.take(fold*self.val_size)
+        #     train_2 = self.complete_train.skip((fold+1)*self.val_size).take((self.n_folds-fold-1)*self.val_size)
+        #     self.val_data = self.complete_train.skip(fold*self.val_size).take(self.val_size)
+        #     self.train_data = train_1.concatenate(train_2)
         
-        self.train_data = self.train_data.shuffle(buffer_size=self.n_train_obs, reshuffle_each_iteration=False)
-        self.val_data = self.val_data.shuffle(buffer_size=self.n_val_obs, reshuffle_each_iteration=False)
-        self.test_data = self.test_data.shuffle(buffer_size=self.n_test_obs, reshuffle_each_iteration=False)
+        else:
+            self.val_data = self.complete_train.shard(self.n_folds, index=fold)
+            train_shards = [self.complete_train.shard(self.n_folds, index=i) for i in range(self.n_folds) if i != fold]
+            if len(train_shards) ==1:
+                self.train_data = train_shards[0]
+            else:
+                tmp = train_shards[0]
+                for i in range(1,len(train_shards)):
+                    tmp.concatenate(train_shards[i])
+                self.train_data = tmp
 
-        if self.repeat:
-            self.train_data = self.train_data.repeat()
-            self.val_data = self.val_data.repeat()
-            self.test_data = self.test_data.repeat()
-        
-        self.train_data = self.train_data.batch(self.batch_size, drop_remainder=True)
-        self.val_data = self.val_data.batch(self.batch_size, drop_remainder=True)
-        self.test_data = self.test_data.batch(self.batch_size, drop_remainder=True)
+            self.train_data = self.augment_data(self.train_data, imx, imy)
+            self.train_data = self.prepare_pipeline(self.train_data, self.train_size - self.val_size)
+            self.val_data = self.prepare_pipeline(self.val_data, self.val_size)
 
+        # if self.keypoints is not None:
+        #     self.train_data = self.kp_to_input(self.train_data, self.keypoints)
+        #     self.val_data = self.kp_to_input(self.val_data, self.keypoints)
         
-        if self.prefetch:
-            self.train_data = self.train_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-            self.val_data = self.val_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+        # self.train_data = self.train_data.shuffle(buffer_size=self.train_size - self.train_size//self.n_folds)
+        # self.val_data = self.val_data.shuffle(buffer_size=self.train_size // self.n_folds)
+
+        # if self.repeat:
+        #     self.train_data = self.train_data.repeat()
+        #     self.val_data = self.val_data.repeat()
+        
+        # self.train_data = self.train_data.batch(self.batch_size, drop_remainder=True)
+        # self.val_data = self.val_data.batch(self.batch_size, drop_remainder=True)
+                
+        # if self.prefetch:
+        #     self.train_data = self.train_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+        #     self.val_data = self.val_data.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
         print("prepared preprocessing")
   
     def resize_images(self, data, imx, origx, origy):   
@@ -201,7 +207,7 @@ class Data_Loader():
         return data.interleave(generate_augmentations, cycle_length=1, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     
-    def kp_to_input(self, data, val_data, test_data , kp_list):
+    def kp_to_input(self, data, kp_list):
         """
         This function allows to input keypoints into the model 
         by selecting with a list, always starting with 0 
@@ -221,14 +227,17 @@ class Data_Loader():
             return tf.data.Dataset.from_tensors((inp, lab, fn))
 
 
-        return data.flat_map(resplit), val_data.flat_map(resplit), test_data.flat_map(resplit)
+        return data.flat_map(resplit)
 
-    def load_cephal(self):
+    def load_cephal(self, train=True):
         self.n_landmarks = 20 # Actually 19, workaround so we can easily do the iterative stuff...
-        self.ds_size = 400
+        self.train_size = 150  * self.train_pct // 100
+        self.test_size = 250
         self.orig_im_size = tf.constant([1935,2400])
-        data_dir = pathlib.Path(self.path+self.name+'/images/')
-        list_im = tf.data.Dataset.list_files(str(data_dir)+'*/*') # has default shuffle
+        train_dir = pathlib.Path(self.path+self.name+'/train/')
+        test_dir = pathlib.Path(self.path+self.name+'/test/')
+        train_list = tf.data.Dataset.list_files(str(train_dir)+'*/*', shuffle=False).take(self.train_size)
+        test_list = tf.data.Dataset.list_files(str(test_dir)+'*/*', shuffle=False)
         
         @tf.function
         def process_path(file_path):
@@ -242,15 +251,18 @@ class Data_Loader():
             label = tf.concat([h,w], axis=1)
             return img, label, file_name
 
-        return list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        return train_list.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE), test_list.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         
 
-    def load_droso(self):
+    def load_droso(self, train=True):
         self.n_landmarks = 40
-        self.ds_size = 712
+        self.train_size = 462 * self.train_pct // 100
+        self.test_size = 250
         self.orig_im_size = tf.constant([3840,3234])
-        data_dir = pathlib.Path(self.path+self.name+'/images/')
-        list_im = tf.data.Dataset.list_files(str(data_dir)+'*/*')
+        train_dir = pathlib.Path(self.path+self.name+'/train/')
+        test_dir = pathlib.Path(self.path+self.name+'/test/')
+        train_list = tf.data.Dataset.list_files(str(train_dir)+'*/*', shuffle=False).take(self.train_size)
+        test_list = tf.data.Dataset.list_files(str(test_dir)+'*/*', shuffle=False)
 
         @tf.function
         def process_path(file_path):
@@ -266,4 +278,4 @@ class Data_Loader():
             label = tf.concat([h,w],axis=1) 
             return img, label, file_name
         
-        return list_im.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        return train_list.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE), test_list.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
