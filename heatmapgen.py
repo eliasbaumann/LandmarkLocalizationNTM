@@ -15,7 +15,7 @@ def _generate_heatmap(coords, imx, sigma=3): #square
 def generate_heatmaps(coord_list, imx, n_landmarks, sigma):
     hm_list = tf.map_fn(lambda x: _generate_heatmap(x, imx, sigma), coord_list) 
     paddings = [[0,n_landmarks-tf.shape(hm_list)[0]],[0,0],[0,0],[0,0]] 
-    hm_list = tf.pad(hm_list, paddings , 'CONSTANT', 0.)
+    hm_list = tf.pad(hm_list, paddings , 'CONSTANT', 1e-5)
     hm_list = tf.image.per_image_standardization(hm_list)
     return tf.squeeze(hm_list)
 

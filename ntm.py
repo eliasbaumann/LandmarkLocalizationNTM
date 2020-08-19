@@ -12,7 +12,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     
     '''
     def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size, layer,
-                 addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
+                 addressing_mode='content_and_location', shift_range=10, reuse=False, output_dim=None, clip_value=20,
                  init_mode='constant', name='ntm_cell'):
         super(NTMCell, self).__init__(name=name)
         # self.controller_layers = controller_layers
@@ -65,7 +65,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
                        for i in range(self.read_head_num + self.write_head_num)]
         self.init_M = self.add_weight(name='init_M_%d' % self.layer,
                                       shape=[self.memory_size, self.memory_vector_dim],
-                                      initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
+                                      initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5)) # TODO try constant initializer
 
 
     

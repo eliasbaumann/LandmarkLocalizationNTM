@@ -229,7 +229,7 @@ class Data_Loader():
 
         return data.flat_map(resplit)
 
-    def load_cephal(self, train=True):
+    def load_cephal(self):
         self.n_landmarks = 20 # Actually 19, workaround so we can easily do the iterative stuff...
         self.train_size = 150  * self.train_pct // 100
         self.test_size = 250
@@ -254,7 +254,7 @@ class Data_Loader():
         return train_list.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE), test_list.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         
 
-    def load_droso(self, train=True):
+    def load_droso(self):
         self.n_landmarks = 40
         self.train_size = 462 * self.train_pct // 100
         self.test_size = 250
