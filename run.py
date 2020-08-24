@@ -552,6 +552,7 @@ if __name__ == "__main__":
         output_dim, 256, int, output dimensions of NTM, has to be square-rootable as it is reshaped to square format and then upsampled needs to match the Unet layer output
         read_head_num, 3, int, number of simultaneous read heads
         write_head_num, 3 int, number of simultaneous write heads
+        init_mode, "constant", str, constant for constant init, anything else for random (missing learned init, but that just adds complexity without much gain)
 
     #### attn_config
     # same structure as ntm_config

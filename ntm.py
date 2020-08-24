@@ -22,7 +22,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.shift_range = shift_range
         self.read_head_num = read_head_num
         self.write_head_num = write_head_num
-        self.addressing_mode = addressing_mode
+        self.addressing_mode = addressing_mode # never implemented any other option anyways :)
         self.reuse = reuse
         self.clip_value = clip_value
         self.num_heads = self.read_head_num+self.write_head_num
@@ -63,9 +63,15 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
                                        shape=[self.memory_size],
                                        initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
                        for i in range(self.read_head_num + self.write_head_num)]
-        self.init_M = self.add_weight(name='init_M_%d' % self.layer,
+        if init_mode == "constant":
+            self.init_M = self.add_weight(name='init_M_%d' % self.layer,
+                                      shape=[self.memory_size, self.memory_vector_dim],
+                                      initializer=tf.constant_initializer(value = 1e-4)) # TODO try constant initializer
+        else:
+            self.init_M = self.add_weight(name='init_M_%d' % self.layer,
                                       shape=[self.memory_size, self.memory_vector_dim],
                                       initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5)) # TODO try constant initializer
+        
 
 
     
@@ -174,9 +180,6 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
     def _expand(self, x, dim, N):
         return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand_%d' % self.layer)
-
-    def _learned_init(self, units):
-        return tf.squeeze(tf.keras.layers.Dense(units, activation_fn=None, biases_initializer=None, name='learned_init_%d' % self.layer)(tf.ones([1, 1])))
 
     @property
     def output_size(self):

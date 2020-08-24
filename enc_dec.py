@@ -21,8 +21,9 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
             self.output_dim = ntm_config["ntm_param"]["output_dim"]
             self.read_head_num = ntm_config["ntm_param"]["read_head_num"]
             self.write_head_num = ntm_config["ntm_param"]["write_head_num"]
+            self.init_mode = ntm_config["ntm_param"]["init_mode"]
             
-            self.cell = NTMCell(controller_units=self.controller_units, memory_size=self.memory_size, memory_vector_dim=self.memory_vector_dim, read_head_num=self.read_head_num, write_head_num=self.write_head_num, output_dim=self.output_dim, batch_size=batch_size, layer=self.layer) 
+            self.cell = NTMCell(controller_units=self.controller_units, memory_size=self.memory_size, memory_vector_dim=self.memory_vector_dim, read_head_num=self.read_head_num, write_head_num=self.write_head_num, output_dim=self.output_dim, batch_size=batch_size, layer=self.layer, init_mode=self.init_mode) 
         else:
             self.controller_units = None
             self.memory_size = None
@@ -30,7 +31,8 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
             self.output_dim = None
             self.read_head_num = None
             self.write_head_num = None
-            
+            self.init_mode = None
+
             self.cell = None
         self.num_filters = ntm_config["enc_dec_param"]["num_filters"]
         self.kernel_size = ntm_config["enc_dec_param"]["kernel_size"]
