@@ -39,14 +39,14 @@ if __name__ == "__main__":
                 break
         dataname = str(exp_config["data_config"]["dataset"])
         folds = int(exp_config["data_config"]["n_folds"])
-        cfg_path = "\\".join(cfg.split("\\")[:-1]+["run_01\\"])
+        cfg_path = "/".join(cfg.split("/")[:-1]+["run_01/"])
         
         # combine per kp:
         for kp in per_kp:
             n = int(exp_config["training_params"]["report_interval"]) * int(exp_config["training_params"]["num_gpu"]) if "train" in str(kp) else int(exp_config["training_params"]["validation_steps"]) * int(exp_config["training_params"]["num_gpu"])
             fold_list = []
             for i in range(folds):
-                with open(os.path.join(cfg_path, "fold_0"+str(i)+"\\"+kp), 'r') as results:
+                with open(os.path.join(cfg_path, "fold_0"+str(i)+"/"+kp), 'r') as results:
                     data = np.array(results.read().split('\n'))[:-1]
                 data = [np.array(i.split(","), dtype=np.float) for i in data]
                 if dataname == "cephal":
@@ -67,7 +67,7 @@ if __name__ == "__main__":
             n = int(exp_config["training_params"]["report_interval"]) * int(exp_config["training_params"]["num_gpu"]) if "train" in loss else int(exp_config["training_params"]["validation_steps"]) * int(exp_config["training_params"]["num_gpu"])
             fold_list = []
             for i in range(folds):
-                with open(os.path.join(cfg_path, "fold_0"+str(i)+"\\"+loss), 'r') as results:
+                with open(os.path.join(cfg_path, "fold_0"+str(i)+"/"+loss), 'r') as results:
                     data = np.array(results.read().split('\n'))[:-1].astype(np.float)
                 fold_list.append(zip(data[0::2], data[1::2]))
             prepped = np.transpose(np.array(list(zip(*fold_list))), (0,2,1))
@@ -81,7 +81,7 @@ if __name__ == "__main__":
         fold_list_kp = []
         fold_list_time = []
         for i in range(folds):
-            with open(os.path.join(cfg_path, "fold_0"+str(i)+'\\test_res.txt'), 'r') as results:
+            with open(os.path.join(cfg_path, "fold_0"+str(i)+'/test_res.txt'), 'r') as results:
                 data = np.array(results.read().split('\n'))[:-1]
             fold_list_loss.append(data[0:2].astype(np.float))
             fold_kp = [np.array(data[i].split(",")[:-1], dtype=np.float) for i in range(2,10)] if dataname == "cephal" else [np.array(data[i].split(","), dtype=np.float) for i in range(2,10)]
