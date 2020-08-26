@@ -53,6 +53,7 @@ class Train(object):
         self.cp_path = cp_path
         self.iter = True if training_params["mode"]=="iter" else False
         self.print_samples = True if training_params["store_samples"]>=1 else False
+        self.predict_self = True if training_params["self_predict"]==1 else False
 
     def dist_ssd_loss(self, gt_labels, logits):
         return tf.reduce_sum(tf.square(gt_labels-logits), axis=None)
@@ -121,9 +122,20 @@ class Train(object):
         _, _, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         return loss, kp_loss, c_dist
 
+    def train_step_sp(self, inp, lab): #TODO
+        inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
+        with tf.GradientTape() as tape:
+            pred, _, _ = self.model.pred_self(inp)
+            loss = self.compute_loss(lab, pred)
+        grad = tape.gradient(loss, self.model.trainable_weights)
+        clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
+        self.optimizer.apply_gradients(zip(clipped_grad, self.model.trainable_weights))
+        _, _, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
+        return loss, kp_loss, c_dist
+
     def val_step(self, inp, lab):
         inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
-        pred, _, _ = self.model(inp, training=False)
+        pred, _, _ = self.model.pred_self(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
@@ -139,6 +151,16 @@ class Train(object):
                     pass
         return mems
 
+    def get_attn(self, attn_maps):
+        attn = []
+        for i in attn_maps:
+            for j in i:
+                if tf.reduce_sum(j) == tf.constant(0.):
+                    pass
+                else:
+                    attn.append(j)
+        return attn
+
     def test_step(self, inp, lab, fn):
         inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
         img = inp[0,:,:1,:,:]
@@ -148,18 +170,19 @@ class Train(object):
             given_kp = tf.expand_dims(tf.reshape(tf.transpose(tf.expand_dims(inp[0,:,1:,:,:],axis=0), [0,2,1,3,4]), [-1, self.data_config["batch_size"], self.im_size[0], self.im_size[0]]), axis=2)
         else:
             given_kp = tf.constant(0.)
-        pred, states, attn_maps = self.model.pred_test(inp, training=False) if self.iter else self.model(inp, training=False)
+        pred, states, attn_maps = self.model.pred_self(inp, training=False) if self.iter else self.model(inp, training=False)
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
-        if self.print_samples:
-            if self.model.ntm_config is None: 
-                mems = tf.constant(0.)
-            else:
-                mems = self.get_mems(states)
-            
-            tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp, mems, attn_maps], Tout=[])
-        # self.store_samples(img, pred, lab, fn, given_kp, states, attn_maps)
+        if self.model.ntm_config is None: 
+            mems = tf.constant(0.)
+        else:
+            mems = self.get_mems(states)
+        if self.model.attn_config is None:
+            attn = tf.constant(0.)
+        else:
+            attn = self.get_attn(attn_maps)
+        tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp, mems, attn], Tout=[])
         return loss, kp_loss, c_dist, within_margin, closest_to_gt
     
     def min_max_scale(self, inp):
@@ -232,28 +255,6 @@ class Train(object):
                     plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
                     plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(i)+'mem.png')
 
-
-        # for state in states:
-        #     for key in keys:
-        #         if self.model.ntm_config[str(key)]["ntm_param"] is None:
-        #             break
-        #         pos = self.model.ntm_config[str(key)]['enc_dec_param']['pos']
-        #         if pos == "b":
-        #             M_l = state[key*2]['M'][batch_no].numpy()
-        #             M_l = (M_l+1)/2.
-        #             plt.imshow(cv2.cvtColor(M_l, cv2.COLOR_GRAY2BGR))
-        #             plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_l_'+str(count)+'mem.png')
-        #             M_r = state[key*2+1]['M'][batch_no].numpy()
-        #             M_r = (M_r+1)/2.
-        #             plt.imshow(cv2.cvtColor(M_r, cv2.COLOR_GRAY2BGR))
-        #             plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_r_'+str(count)+'mem.png')
-        #         else:
-        #             key = key*2 if pos=="l" else key*2+1
-        #             M = state[key]['M'][batch_no].numpy()
-        #             M = (M+1)/2.
-        #             plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-        #             plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(count)+'mem.png')
-        #     count += 1
     
     def store_attn(self, attn, fn, batch_no):
         if self.model.attn_config is None:
@@ -261,17 +262,22 @@ class Train(object):
         keys = list(map(int, self.model.attn_config.keys()))
         os.makedirs(self.log_path+'/samples/'+fn)
         count = 0
-        for attn_map in attn:
+        for i in range(self.data_landmarks//self.data_config["lm_count"]):
             for key in keys:
-                M = tf.squeeze(attn_map[key][batch_no]).numpy()
+                M = states[count][batch_no].numpy()
+                count +=1
                 plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-                plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+str(count)+'attn.png')
-            count +=1
+                plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(i)+'attn.png')
 
 
     @tf.function
     def distributed_train_step(self, inp, lab):
         per_replica_loss, pr_kp_loss, pr_c_dist = self.strategy.experimental_run_v2(self.train_step, args=(inp, lab,))
+        return self.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None)
+
+    @tf.function
+    def distributed_train_step_sp(self, inp, lab):
+        per_replica_loss, pr_kp_loss, pr_c_dist = self.strategy.experimental_run_v2(self.train_step_sp, args=(inp, lab,))
         return self.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_kp_loss, axis=None), self.strategy.reduce(tf.distribute.ReduceOp.SUM, pr_c_dist, axis=None)
 
     @tf.function
@@ -342,7 +348,10 @@ class Train(object):
         start_time = time.time()
         for step in range(start_steps, self.training_params["num_training_iterations"]+1):
             img, lab, _ = next(train)
-            loss, kp_loss, c_dist = self.distributed_train_step(img, lab)
+            if self.predict_self:
+                loss, kp_loss, c_dist = self.distributed_train_step_sp(img, lab)
+            else:
+                loss, kp_loss, c_dist = self.distributed_train_step(img, lab)
             
             train_loss.append(loss)
             train_loss_lm.append([kp_loss])
@@ -408,14 +417,19 @@ class Train(object):
         test_c_dist = []
         test_mrg = []
         test_cgt = []
+        sample_count = 0
         for _ in range(self.dataset_test_size // self.strategy.num_replicas_in_sync):
             img_t, lab_t, fn = next(test)
-            t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(img_t, lab_t, fn)
+            if sample_count < self.training_params["store_samples"]:
+                t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_test_step(img_t, lab_t, fn)
+            else:
+                t_loss, t_kp_loss, t_c_dist, t_within_margin, t_closest_to_gt = self.distributed_val_step(img_t, lab_t)
             test_loss.append(t_loss)
             test_kp_loss.append([t_kp_loss])
             test_c_dist.append([t_c_dist])
             test_mrg.append(t_within_margin)
             test_cgt.append(t_closest_to_gt)
+            sample_count +=1
         
         test_res = [np.array(tf.squeeze(tf.reduce_mean(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
         test_std = [np.array(tf.squeeze(tf.math.reduce_std(i, axis=0))) for i in [test_loss, test_kp_loss, test_c_dist, test_mrg, test_cgt]]
@@ -605,7 +619,8 @@ if __name__ == "__main__":
     checkpoint_interval, 500, int, number of steps at which a model checkpoints happens, -> can only be used to reuse model for predictions, not to resume training, because no way to ensure data consistency currently
     num_test_samples, 5, int, number of samples (samples*batch_size) to test the model on, these samples are also printed and stored
     mode, ["iter", "simul"], one of the two strings, defines in which mode the network learns / predicts, either iteratively learning landmarks or all landmarks simultaneously (or with kp_list_in input landmarks)
-    store_samples, 1 for True anything else for false, int, defines if samples are being stored at test time
+    self_predict, 1, binary, 1=true, 0=False, whether to use self predict @ train time
+    store_samples, 10, int, number of samples to store as images x num gpus
     num_gpu, 4, int, number of gpus to use
     '''
     PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' # can define this explicitely to be an experiment folder to re-run select experiments
