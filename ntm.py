@@ -11,8 +11,8 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     '''
     
     '''
-    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size, layer,
-                 addressing_mode='content_and_location', shift_range=10, reuse=False, output_dim=None, clip_value=20,
+    def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size,
+                 addressing_mode='content_and_location', shift_range=10, output_dim=None, clip_value=20,
                  init_mode='constant', name='ntm_cell'):
         super(NTMCell, self).__init__(name=name)
         # self.controller_layers = controller_layers
@@ -23,13 +23,11 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.read_head_num = read_head_num
         self.write_head_num = write_head_num
         self.addressing_mode = addressing_mode # never implemented any other option anyways :)
-        self.reuse = reuse
         self.clip_value = clip_value
         self.num_heads = self.read_head_num+self.write_head_num
         self.batch_size = batch_size
-        self.layer = layer
 
-        self._controller = tf.keras.layers.LSTMCell(units=self.controller_units)
+        self._controller = tf.keras.layers.LSTMCell(units=self.controller_units, name=self.name+"controller")
 
         self.num_params_per_head = self.memory_vector_dim + 1 + 1 + (self.shift_range * 2 + 1) + 1
         self.total_param_num = self.num_params_per_head * self.num_heads + self.memory_vector_dim * 2 * self.write_head_num
@@ -44,33 +42,33 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.o2p_initializer = create_linear_initializer(self.controller_units)
         self.o2o_initializer = create_linear_initializer(self.controller_units + self.memory_vector_dim * self.read_head_num)
 
-        self.o2p = tf.keras.layers.Dense(units=self.total_param_num, use_bias=True, kernel_initializer=self.o2p_initializer, name='o2p')
-        self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer, name='o2o')
+        self.o2p = tf.keras.layers.Dense(units=self.total_param_num, use_bias=True, kernel_initializer=self.o2p_initializer, name=self.name+'o2p')
+        self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer, name=self.name+'o2o')
 
         # for initial state: Create variables:
         # from https://github.com/snowkylin/ntm/blob/master/ntm/ntm_cell_v2.py#L39 
-        self.init_memory_state = self.add_weight(name='init_memory_state_%d' % self.layer,
+        self.init_memory_state = self.add_weight(name=self.name+'init_memory_state',
                                                  shape=[self.controller_units],
                                                  initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-        self.init_carry_state = self.add_weight(name='init_carry_state_%d' % self.layer,
+        self.init_carry_state = self.add_weight(name=self.name+'init_carry_state',
                                                 shape=[self.controller_units],
                                                 initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-        self.init_r = [self.add_weight(name='init_r_%d_%d' % (self.layer, i),
+        self.init_r = [self.add_weight(name=self.name+'init_r_%d' % i,
                                        shape=[self.memory_vector_dim],
                                        initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
                        for i in range(self.read_head_num)]
-        self.init_w = [self.add_weight(name='init_w_%d_%d' % (self.layer, i),
+        self.init_w = [self.add_weight(name=self.name+'init_w_%d' % i,
                                        shape=[self.memory_size],
                                        initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
                        for i in range(self.read_head_num + self.write_head_num)]
         if init_mode == "constant":
-            self.init_M = self.add_weight(name='init_M_%d' % self.layer,
+            self.init_M = self.add_weight(name=self.name+'init_M',
                                       shape=[self.memory_size, self.memory_vector_dim],
-                                      initializer=tf.constant_initializer(value = 1e-4)) # TODO try constant initializer
+                                      initializer=tf.constant_initializer(value = 1e-4)) 
         else:
-            self.init_M = self.add_weight(name='init_M_%d' % self.layer,
+            self.init_M = self.add_weight(name=self.name+'init_M',
                                       shape=[self.memory_size, self.memory_vector_dim],
-                                      initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5)) # TODO try constant initializer
+                                      initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5)) 
         
 
 
@@ -78,7 +76,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     def call(self, x, prev_state):
         prev_read_list = prev_state["read_vector_list"]
         #prev_read_list.set_shape([self.read_head_num, self.batch_size, self.memory_vector_dim])
-        controller_input = tf.concat([x]+prev_read_list, axis=1, name='concat_ctrl_inp%d' % self.layer)
+        controller_input = tf.concat([x]+prev_read_list, axis=1, name=self.name+'concat_ctrl_inp')
         controller_state = prev_state["controller_state"]
         # controller_state.set_shape([2, self.batch_size, self.controller_units])
         controller_output, controller_state = self._controller(controller_input, controller_state)
@@ -117,7 +115,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
             add_vec = tf.expand_dims(tf.tanh(erase_add_list[i*2+1]), axis=1)
             M = M * (tf.ones(M.get_shape()) - tf.matmul(w, erase_vec)) + tf.matmul(w, add_vec)
 
-        ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1, name='concat_ntm_out_%d' % self.layer))
+        ntm_output = self.o2o(tf.concat([controller_output] + read_vector_list, axis=1, name=self.name+'concat_ntm_out'))
         ntm_output = tf.clip_by_value(ntm_output, -self.clip_value, self.clip_value)
         state = {
             'controller_state': controller_state,
@@ -139,11 +137,11 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
 
         s = tf.concat([s[:, :self.shift_range + 1],
                        tf.zeros([s.get_shape()[0], self.memory_size - (self.shift_range * 2 + 1)]),
-                       s[:, -self.shift_range:]], axis=1, name='concat_adressing_%d_1' % self.layer)
+                       s[:, -self.shift_range:]], axis=1, name=self.name+'concat_adressing_1')
         t = tf.concat([tf.reverse(s, axis=[1]), tf.reverse(s, axis=[1])], axis=1)
         s_matrix = tf.stack(
             [t[:, self.memory_size - i - 1:self.memory_size * 2 - i - 1] for i in range(self.memory_size)],
-            axis=1, name='concat_adressing_%d_2' % self.layer
+            axis=1, name=self.name+'concat_adressing_2'
         )
 
         w_ = tf.reduce_sum(tf.expand_dims(w_g, axis=1)*s_matrix, axis=2)
@@ -179,7 +177,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         return initial_state
 
     def _expand(self, x, dim, N):
-        return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name='concat_expand_%d' % self.layer)
+        return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim, name=self.name+'concat_expand')
 
     @property
     def output_size(self):

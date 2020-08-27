@@ -92,7 +92,7 @@ class Train(object):
             inp = tf.expand_dims(img, axis=0)
             lab = tf.expand_dims(lab, axis=0)
             return inp, lab
-        ep_lab_0 = tf.fill(tf.shape(lab[:,0:lm_count,:,:]), -1e-4)
+        ep_lab_0 = tf.fill(tf.shape(lab[:,0:lm_count,:,:]), 1e-4)
         # ep_lab = tf.zeros_like(lab)[:,0:lm_count,:,:] # t-1 label (4,lm_count,256,256)
         img = tf.expand_dims(tf.repeat(img, lm//lm_count, axis=1), axis=2)
         ep_lab = tf.concat([ep_lab_0, lab[:,0:lm-lm_count,:,:]], axis=1)
@@ -321,7 +321,7 @@ class Train(object):
             np.savetxt(vcdtxt, [np.array(vcd[1])], fmt='%.3f', delimiter=",")
 
         #tf.print("% within margin: ", mrg[0], summarize=-1)
-        with open(os.path.join(self.log_path, 'vaL_within_margin.txt'), 'ab') as mrgtxt:
+        with open(os.path.join(self.log_path, 'val_within_margin.txt'), 'ab') as mrgtxt:
             np.savetxt(mrgtxt, [np.array(mrg[0])], fmt='%3.3f', delimiter=",")
             np.savetxt(mrgtxt, [np.array(mrg[1])], fmt='%3.3f', delimiter=",")
 

@@ -86,18 +86,18 @@ class unet(tf.keras.layers.AbstractRNNCell):
                 assert self.batch_size is not None, 'Please set batch_size in unet2d init'
                 assert conf["enc_dec_param"] is not None, "Please define parameters for the encoder-decoder part"
                 if conf["enc_dec_param"]["pos"] == "l":
-                    self.ntm_l = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_l_"+str(self.layer))
+                    self.ntm_l = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, name="ntm_l_"+str(self.layer))
                 elif conf["enc_dec_param"]["pos"] == "r":
-                    self.ntm_r = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_r_"+str(self.layer))
+                    self.ntm_r = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, name="ntm_r_"+str(self.layer))
                 else:
-                    self.ntm_l = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_l_"+str(self.layer))
-                    self.ntm_r = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, layer=self.layer, name="ntm_r_"+str(self.layer))   
+                    self.ntm_l = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, name="ntm_l_"+str(self.layer))
+                    self.ntm_r = Encoder_Decoder_Wrapper(ntm_config=conf, batch_size=self.batch_size, name="ntm_r_"+str(self.layer))   
         
         self.attention = None
         if self.attn_config is not None:
             if self.layer in list(map(int, self.attn_config.keys())):
                 atn = self.attn_config[str(self.layer)]
-                self.attention = AttentionGate(n_filters=atn["num_filters"], kernel_size=1, layer=self.layer, name='attn_'+str(self.layer))
+                self.attention = AttentionGate(n_filters=atn["num_filters"], kernel_size=1, name='attn_'+str(self.layer))
         
         if self.layer >= len(self.downsample_factors)-1:
             self.drop = tf.keras.layers.Dropout(.2,seed=42, name='dropout_%i'%self.layer)
