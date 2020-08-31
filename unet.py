@@ -32,7 +32,7 @@ class unet2d(tf.keras.Model):
             attn_out.append(attn_maps)
         return tf.stack(out, axis=0), mem_out, attn_out
     
-    def pred_self(self, inputs, training=False):
+    def pred_self(self, inputs, training=True):
         states = self.setup_states()
         out = []
         mem_out = []
