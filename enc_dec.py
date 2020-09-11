@@ -5,6 +5,16 @@ import tensorflow as tf
 
 from ntm import NTMCell
 
+class ActivityRegularizationLayer(tf.keras.layers.Layer):
+    def __init__(self, l2, name, **kwargs):
+        super(ActivityRegularizationLayer, self).__init__(name=name, **kwargs)
+        self.l2 = l2
+
+    def call(self, inputs):
+        self.add_loss(self.l2*tf.reduce_sum(tf.square(inputs)))
+        return inputs
+
+
 class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
     '''
     Wraps NTMcell in an encoder decoder structure that downsamples and then upsamples the input with the bottleneck being an ntm cell
@@ -44,7 +54,9 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
         self.ds = [tf.keras.layers.AveragePooling2D(pool_size=i, strides=self.pool_size, data_format='channels_first', name=self.name+'enc_dec_ds_%d' % i) for i in self.pool_size]
         self.us = [tf.keras.layers.UpSampling2D(size=i, data_format='channels_first', name=self.name+'enc_dec_us_%d' % i) for i in self.pool_size[::-1]]
 
-        self.flat = tf.keras.layers.Flatten(data_format='channels_first', name=self.name+'enc_dec_flat')        
+        self.flat = tf.keras.layers.Flatten(data_format='channels_first', name=self.name+'enc_dec_flat')
+
+        self.reg = ActivityRegularizationLayer(1., self.name+'activity_regularization')        
 
     def call(self, x, state):
         for i in range(len(self.pool_size)):
@@ -63,5 +75,6 @@ class Encoder_Decoder_Wrapper(tf.keras.layers.AbstractRNNCell):
             x = self.conv[i+len(self.pool_size)](x)
             x = self.us[i](x)
         x = self.conv[len(self.pool_size)*2](x)
+        x = self.reg(x)
         return x, state
 

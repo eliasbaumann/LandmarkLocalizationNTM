@@ -12,7 +12,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
     
     '''
     def __init__(self, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, batch_size,
-                 addressing_mode='content_and_location', shift_range=5, output_dim=None, clip_value=20,
+                 addressing_mode='content_and_location', shift_range=1, output_dim=None, clip_value=20,
                  init_mode='constant', name='ntm_cell'):
         super(NTMCell, self).__init__(name=name)
         # self.controller_layers = controller_layers
@@ -43,7 +43,7 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         self.o2o_initializer = create_linear_initializer(self.controller_units + self.memory_vector_dim * self.read_head_num)
 
         self.o2p = tf.keras.layers.Dense(units=self.total_param_num, use_bias=True, kernel_initializer=self.o2p_initializer, name=self.name+'_o2p')
-        self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer, name=self.name+'_o2o')
+        self.o2o = tf.keras.layers.Dense(units=self.output_dim, use_bias=True, kernel_initializer=self.o2o_initializer, name=self.name+'_o2o') #activity_regularizer=NL1Regularizer(l1=.1),
 
         # for initial state: Create variables:
         # from https://github.com/snowkylin/ntm/blob/master/ntm/ntm_cell_v2.py#L39 
@@ -95,10 +95,10 @@ class NTMCell(tf.keras.layers.AbstractRNNCell):
         # create params
         for i, head_parameter in enumerate(head_parameter_list):
             k = tf.tanh(head_parameter[:, 0:self.memory_vector_dim])
-            beta = tf.nn.softplus(head_parameter[:, self.memory_vector_dim])
+            beta = tf.nn.softmax(head_parameter[:, self.memory_vector_dim]) * 10
             g = tf.sigmoid(head_parameter[:, self.memory_vector_dim + 1])
             s = tf.nn.softmax(head_parameter[:, self.memory_vector_dim + 2:self.memory_vector_dim + 2 + (self.shift_range * 2 + 1)])
-            gamma = tf.nn.softplus(head_parameter[:, -1]) + 1
+            gamma = tf.nn.softmax(head_parameter[:, -1]) + 1
             w = self._addressing(k, beta, g, s, gamma, prev_M, prev_w_list[i])
             w_list.append(w)
         
