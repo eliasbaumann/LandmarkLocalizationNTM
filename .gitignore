@@ -1,15 +1,9 @@
 ignore.py
-__pycache__/data.cpython-36.pyc
-__pycache__/access.cpython-36.pyc
-__pycache__/adressing.cpython-36.pyc
-__pycache__/dnccell.cpython-36.pyc
-__pycache__/util.cpython-36.pyc
+__pycache__/*
+figures_results/*
 bibliography.Data/
-__pycache__/unet.cpython-36.pyc
 Meta landmark learning.txt
-__pycache__/heatmapgen.cpython-36.pyc
-__pycache__/run.cpython-36.pyc
-__pycache__/net_tests.cpython-36.pyc
-__pycache__/tests.cpython-36.pyc
 compute_receptive_field.py
 .vscode/launch.json
+create_plots.ipynb
+run_old.py
