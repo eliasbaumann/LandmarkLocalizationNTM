@@ -131,10 +131,10 @@ class unet(tf.keras.layers.AbstractRNNCell):
         state_l = tf.constant(0.)
         state_r = tf.constant(0.)
         attn_map = tf.constant(0.)
-        f_left = self.inp_conv(inputs)
         if self.ntm_l is not None:
-            mem_l, state_l = self.ntm_l(f_left, prev_state[self.layer*2])
-            f_left = tf.concat([mem_l, f_left], axis=1)
+            mem_l, state_l = self.ntm_l(inputs, prev_state[self.layer*2])
+            inputs = mem_l*inputs
+        f_left = self.inp_conv(inputs)
         # bottom layer:
         if self.layer == len(self.downsample_factors):
             f_left = self.drop(f_left, training=training)
@@ -151,11 +151,10 @@ class unet(tf.keras.layers.AbstractRNNCell):
         
         if self.attention is not None:
             f_left_cropped, attn_map = self.attention(g_out_upsampled, f_left_cropped)
-
+        if self.ntm_r is not None: # TODO maybe something like this? I want it to be as similar as possible to oktay
+            mem_r, state_r = self.ntm_r(tf.add(g_out_upsampled, f_left_cropped), prev_state[self.layer*2+1])
+            f_left_cropped = mem_r * g_out_upsampled
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
-        if self.ntm_r is not None:
-            mem_r, state_r = self.ntm_r(f_right, prev_state[self.layer*2+1])
-            f_right = tf.concat([mem_r, f_right], axis=1)
         f_out = self.out_conv(f_right)
         return f_out, [state_l, state_r, *state_rec], [attn_map, *attn_rec]
 

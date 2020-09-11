@@ -127,6 +127,7 @@ class Train(object):
         with tf.GradientTape() as tape:
             pred, _, _ = self.model.pred_self(inp)
             loss = self.compute_loss(lab, pred)
+            loss += tf.nn.scale_regularization_loss(tf.reduce_sum(self.model.losses))
         grad = tape.gradient(loss, self.model.trainable_weights)
         clipped_grad, _ = tf.clip_by_global_norm(grad, 10000.0)
         self.optimizer.apply_gradients(zip(clipped_grad, self.model.trainable_weights))
