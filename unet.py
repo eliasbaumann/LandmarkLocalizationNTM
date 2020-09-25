@@ -152,7 +152,7 @@ class unet(tf.keras.layers.AbstractRNNCell):
         if self.attention is not None:
             f_left_cropped, attn_map = self.attention(g_out_upsampled, f_left_cropped)
         if self.ntm_r is not None: # TODO maybe something like this? I want it to be as similar as possible to oktay
-            mem_r, state_r = self.ntm_r(tf.add(g_out_upsampled, f_left_cropped), prev_state[self.layer*2+1])
+            mem_r, state_r = self.ntm_r(tf.concat([g_out_upsampled, f_left_cropped],1), prev_state[self.layer*2+1])
             f_left_cropped = mem_r * g_out_upsampled
         f_right = tf.concat([f_left_cropped, g_out_upsampled],1)
         f_out = self.out_conv(f_right)
