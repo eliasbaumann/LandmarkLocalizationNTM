@@ -152,15 +152,8 @@ class Train(object):
                     pass
         return mems
 
-    def get_attn(self, attn_maps):
-        attn = []
-        for i in attn_maps:
-            for j in i:
-                if tf.reduce_sum(j) == tf.constant(0.):
-                    pass
-                else:
-                    attn.append(j)
-        return attn
+    def flatten_maps(self, maps):
+        return [i for j in maps for i in j]
 
     def test_step(self, inp, lab, fn):
         inp, lab = self.convert_input(inp, lab, self.data_landmarks, self.data_config["lm_count"], self.iter)
@@ -175,28 +168,53 @@ class Train(object):
         loss = self.compute_loss(lab, pred)
         lab, pred, kp_loss, c_dist = self.kp_loss_c_dist(lab, pred)
         within_margin, closest_to_gt = self.dist_per_kp_stats_iter(lab, pred, self.kp_margin)
+        
         if self.model.ntm_config is None: 
             mems = tf.constant(0.)
         else:
-            mems = self.get_mems(states)
+            mem_names = tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp], Tout=[tf.string])
+            cnt = 0
+            for i in self.get_mems(states):
+                cnt += tf.py_function(func=self.store_mem, inp=[i, mem_names, cnt], Tout=tf.int32)
+        
         if self.model.attn_config is None:
-            attn = tf.constant(0.)
+            attn = []
         else:
-            attn = self.get_attn(attn_maps)
-        tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp, mems, attn], Tout=[])
+            attn = self.flatten_maps(attn_maps)
+            attn_names = tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp], Tout=[tf.string])
+            cnt = 0
+            for i in attn:
+                cnt += tf.py_function(func=self.store_attn, inp=[i, attn_names, cnt], Tout=tf.int32)
         return loss, kp_loss, c_dist, within_margin, closest_to_gt
     
     def min_max_scale(self, inp):
         return (inp-inp.min())/(inp.max()-inp.min())
 
-    def store_samples(self, img, pred, lab, filenames, given_kp = None, states=None, attn_maps=None):
+    def store_attn(self, attn, names, i):
+        img = attn.numpy().squeeze()
+        if np.sum(img) == 0:
+            return 0
+        name = names.numpy().flatten()#
+        plt.imshow(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
+        plt.savefig(name[i.numpy()].decode('UTF-8'))
+        return 1
+
+    def store_mem(self, states, names, i):
+        img = states.numpy().squeeze()
+        img = (img+1.)/2.
+        name = names.numpy().flatten()
+        plt.imshow(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
+        plt.savefig(name[i.numpy()].decode('UTF-8'))
+        return 1
+        
+
+    def store_samples(self, img, pred, lab, filenames, given_kp = None):
         # tf.print(filenames)
         # print(filenames)
         # if self.data_config["batch_size"] == 1:
         #     filenames = [filenames.decode('UTF-8')]
         # else:
         filenames = [i.decode('UTF-8') for i in filenames.numpy()]
-        
         pred_keypoints = tf.transpose(self.get_max_indices_argmax(pred), [1,0,2])
         lab_keypoints = tf.transpose(self.get_max_indices_argmax(lab), [1,0,2])
         
@@ -217,6 +235,7 @@ class Train(object):
             given_kp = tf.transpose(self.get_max_indices_argmax(given_kp), [1,0,2]).numpy()
         else:
             given_kp = np.repeat(None, img.shape[0])
+        names = []
         for i in range(img.shape[0]): # per batch iteration                
             vis_points(img[i], pred_keypoints[i], 3, given_kp=given_kp[i])
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_pred.png')
@@ -224,51 +243,93 @@ class Train(object):
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_gt.png')
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_pred_logits.png')
+            if self.model.attn_config is not None:
+                names.append(self.get_attn_names(filenames[i], i))
+            elif self.model.ntm_config is not None:
+                names.append(self.get_mem_names(filenames[i], i))
+        return names
+            
             # plt.imshow(cv2.cvtColor(lab_lg_comp[i], cv2.COLOR_GRAY2BGR))
             # plt.savefig(self.log_path+'/samples/'+filenames[i]+'_gt_logits.png')
-            self.store_mem(states, filenames[i], i)
-            self.store_attn(attn_maps, filenames[i], i)
+            # self.store_mem(states, filenames[i], i)
+            # self.store_attn(attn_maps, filenames[i], i)
+    # def get_mem_names(self, fn, batch_no):
+    #     if self.mode.ntm_config is None:
+    #         return []
+    #     keys = list(map(int, self.model.ntm_config.keys()))
+    #     os.makedirs(self.log_path+'/samples/'+fn)
+    #     count = 0
+    #     for i in range(self.data_landmarks//self.data_config["lm_count"]):
+    #         for key in keys:
+    #             pos = self.model.ntm_config[str(key)]['enc_dec_param']['pos']
 
-    def store_mem(self, states, fn, batch_no):
-        # Currently does not work for anything with batch_size >1
-        if self.model.ntm_config is None: 
-            return
+    def get_attn_names(self, fn, batch_no):
+        names = []
+        if self.model.attn_config is None:
+            return names 
+        keys = list(map(int, self.model.attn_config.keys()))
+        os.makedirs(self.log_path+'/samples/'+fn)
+        for i in range(self.data_landmarks//self.data_config["lm_count"]) if self.training_params["mode"] == "iter" else range(1):
+            for key in keys:
+                names.append(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+str(i)+'attn.png')
+        return names
+
+    def get_mem_names(self, fn, batch_no):
+        names = []
+        if self.model.ntm_config is None:
+            return names
         keys = list(map(int, self.model.ntm_config.keys()))
         os.makedirs(self.log_path+'/samples/'+fn)
-        count = 0
-        for i in range(self.data_landmarks//self.data_config["lm_count"]):
+        for i in range(self.data_landmarks//self.data_config["lm_count"]) :
             for key in keys:
                 pos = self.model.ntm_config[str(key)]['enc_dec_param']['pos']
                 if pos == "b":
-                    M_l = states[count][batch_no].numpy()
-                    M_l = (M_l+1)/2.
-                    plt.imshow(cv2.cvtColor(M_l, cv2.COLOR_GRAY2BGR))
-                    plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_l_'+str(i)+'mem.png')
-                    M_r = states[count+1][batch_no].numpy()
-                    M_r = (M_r+1)/2.
-                    count +=2
-                    plt.imshow(cv2.cvtColor(M_r, cv2.COLOR_GRAY2BGR))
-                    plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_r_'+str(i)+'mem.png')
+                    names.append(self.log_path+'/samples/'+fn+'/'+str(key)+'_l_'+str(i)+'mem.png') 
+                    names.append(self.log_path+'/samples/'+fn+'/'+str(key)+'_r_'+str(i)+'mem.png') 
                 else:
-                    M = states[count][batch_no].numpy()
-                    M = (M+1)/2.
-                    count +=1
-                    plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-                    plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(i)+'mem.png')
+                    names.append(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(i)+'mem.png')
+        return names
+
+    # def store_mem(self, states, fn, batch_no):
+    #     # Currently does not work for anything with batch_size >1 on one gpu
+    #     if self.model.ntm_config is None: 
+    #         return
+    #     keys = list(map(int, self.model.ntm_config.keys()))
+    #     os.makedirs(self.log_path+'/samples/'+fn)
+    #     count = 0
+    #     for i in range(self.data_landmarks//self.data_config["lm_count"]) :
+    #         for key in keys:
+    #             pos = self.model.ntm_config[str(key)]['enc_dec_param']['pos']
+    #             if pos == "b":
+    #                 M_l = states[count][batch_no].numpy()
+    #                 M_l = (M_l+1)/2.
+    #                 plt.imshow(cv2.cvtColor(M_l, cv2.COLOR_GRAY2BGR))
+    #                 plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_l_'+str(i)+'mem.png')
+    #                 M_r = states[count+1][batch_no].numpy()
+    #                 M_r = (M_r+1)/2.
+    #                 count +=2
+    #                 plt.imshow(cv2.cvtColor(M_r, cv2.COLOR_GRAY2BGR))
+    #                 plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_r_'+str(i)+'mem.png')
+    #             else:
+    #                 M = states[count][batch_no].numpy()
+    #                 M = (M+1)/2.
+    #                 count +=1
+    #                 plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
+    #                 plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(i)+'mem.png')
 
     
-    def store_attn(self, attn, fn, batch_no):
-        if self.model.attn_config is None:
-            return
-        keys = list(map(int, self.model.attn_config.keys()))
-        os.makedirs(self.log_path+'/samples/'+fn)
-        count = 0
-        for i in range(self.data_landmarks//self.data_config["lm_count"]):
-            for key in keys:
-                M = states[count][batch_no].numpy()
-                count +=1
-                plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
-                plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+pos+'_'+str(i)+'attn.png')
+    # def store_attn(self, attn, fn, batch_no):
+    #     if self.model.attn_config is None:
+    #         return
+    #     keys = list(map(int, self.model.attn_config.keys()))
+    #     os.makedirs(self.log_path+'/samples/'+fn)
+    #     count = 0
+    #     for i in range(self.data_landmarks//self.data_config["lm_count"]):
+    #         for key in keys:
+    #             M = attn[count][batch_no].numpy()
+    #             count +=1
+    #             plt.imshow(cv2.cvtColor(M, cv2.COLOR_GRAY2BGR))
+    #             plt.savefig(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+str(i)+'attn.png')
 
 
     @tf.function
@@ -440,7 +501,6 @@ class Train(object):
                 np.savetxt(testtxt, [test_res[i]], fmt='%3.3f', delimiter=",")
                 np.savetxt(testtxt, [test_std[i]], fmt='%3.3f', delimiter=",")
             np.savetxt(testtxt, [total_time], fmt='%3.3f', delimiter=",")
-
 
 def vis_points(image, points, diameter=5, given_kp=None):
     im = (image.copy()+1.)/2. # h,w
