@@ -8,17 +8,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--path', type=str, default=None, help='Select directory to combine folds')
 args = parser.parse_args()
 
-def combine_folds(filename, paths):
-    with open(os.path.join(paths[0],'config.json')) as config:
-        data = json.load(config)
-
-    if filename.startswith('train'):
-        pass
-    elif filename.startswith('val'):
-        pass    
-    else: #test_res
-        pass
-
 if __name__ == "__main__":
     if args.path is not None:
         PATH = args.path
@@ -84,7 +73,7 @@ if __name__ == "__main__":
             with open(os.path.join(cfg_path, "fold_0"+str(i)+'/test_res.txt'), 'r') as results:
                 data = np.array(results.read().split('\n'))[:-1]
             fold_list_loss.append(data[0:2].astype(np.float))
-            fold_kp = [np.array(data[i].split(",")[:-1], dtype=np.float) for i in range(2,10)] if dataname == "cephal" else [np.array(data[i].split(","), dtype=np.float) for i in range(2,10)]
+            fold_kp = [np.array(data[i].split(",")[:-1], dtype=np.float) for i in range(2,22)] if dataname == "cephal" else [np.array(data[i].split(","), dtype=np.float) for i in range(2,22)]
             fold_kp = np.array(fold_kp)
             # print(fold_kp)
             fold_list_kp.append(np.array(list(zip(fold_kp[0::2], fold_kp[1::2]))))
