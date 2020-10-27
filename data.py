@@ -18,7 +18,7 @@ def decode_image(file_path):
     return img
 
 class Data_Loader():
-    def __init__(self, data_path, name, batch_size, train_pct=80,  n_folds=3, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
+    def __init__(self, data_path, name, batch_size, train_pct,  n_folds, repeat=True, prefetch=True, n_aug_rounds=5, sigma=1.):
         self.path = data_path
         self.name = name
         self.batch_size = batch_size
