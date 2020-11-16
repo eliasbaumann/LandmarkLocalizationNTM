@@ -12,12 +12,12 @@ import tensorflow as tf
 import unet
 import data
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_MAX_THREADS"] = "1"
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["OPENBLAS_NUM_THREADS"] = "1"
+# os.environ["MKL_NUM_THREADS"] = "1"
+# os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+# os.environ["NUMEXPR_NUM_THREADS"] = "1"
+# os.environ["NUMEXPR_MAX_THREADS"] = "1"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 
@@ -208,16 +208,15 @@ class Train(object):
         o_1_mm, o_2_mm, o_3_mm = self.dist_outliers_mm(lab, pred, self.kp_margin)
 
         if self.model.ntm_config is not None:
-            mem_names = tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp], Tout=[tf.string])
+            mem_names = tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, False, given_kp], Tout=[tf.string])
             cnt = 0
             for i in self.get_mems(states):
                 cnt += tf.py_function(func=self.store_mem, inp=[i, mem_names, cnt], Tout=tf.int32)
         
-        if self.model.attn_config is not None or self.mode.ntm_config is not None:
-            attn = self.flatten_maps(attn_maps)
-            attn_names = tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, given_kp], Tout=[tf.string])
+        if self.model.attn_config is not None or self.model.ntm_config is not None:
+            attn_names = tf.py_function(func=self.store_samples, inp=[img, pred, lab, fn, True, given_kp], Tout=[tf.string])
             cnt = 0
-            for i in attn:
+            for i in self.flatten_maps(attn_maps):
                 cnt += tf.py_function(func=self.store_attn, inp=[i, attn_names, cnt], Tout=tf.int32)
         return loss, kp_loss, c_dist, c_dist_mm, o_1, o_2, o_3, o_1_mm, o_2_mm, o_3_mm, closest_to_gt
     
@@ -228,6 +227,7 @@ class Train(object):
         img = attn.numpy().squeeze()
         if np.sum(img) == 0:
             return 0
+        
         name = names.numpy().flatten()#
         plt.imshow(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
         plt.savefig(name[i.numpy()].decode('UTF-8'))
@@ -242,7 +242,7 @@ class Train(object):
         return 1
         
 
-    def store_samples(self, img, pred, lab, filenames, given_kp = None):
+    def store_samples(self, img, pred, lab, filenames, at, given_kp = None):
         # tf.print(filenames)
         # print(filenames)
         # if self.data_config["batch_size"] == 1:
@@ -277,18 +277,19 @@ class Train(object):
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_gt.png')
             plt.imshow(cv2.cvtColor(pred_logits[i], cv2.COLOR_GRAY2BGR))
             plt.savefig(self.log_path+'/samples/'+filenames[i]+'_pred_logits.png')
-            if self.model.attn_config is not None:
+            if at:
                 names.append(self.get_attn_names(filenames[i], i))
-            elif self.model.ntm_config is not None:
+            else:
                 names.append(self.get_mem_names(filenames[i], i))
         return names
             
     def get_attn_names(self, fn, batch_no):
         names = []
-        if self.model.attn_config is None:
+        if self.model.attn_config is None and self.model.ntm_config is None:
             return names 
-        keys = list(map(int, self.model.attn_config.keys()))
-        os.makedirs(self.log_path+'/samples/'+fn)
+        keys = list(map(int, self.model.attn_config.keys())) if self.model.ntm_config is None else list(map(int, self.model.ntm_config.keys()))
+        if not os.path.exists(self.log_path+'/samples/'+fn):
+            os.makedirs(self.log_path+'/samples/'+fn)
         for i in range(self.data_landmarks//self.data_config["lm_count"]) if self.training_params["mode"] == "iter" else range(1):
             for key in keys:
                 names.append(self.log_path+'/samples/'+fn+'/'+str(key)+'_'+str(i)+'attn.png')
@@ -299,7 +300,8 @@ class Train(object):
         if self.model.ntm_config is None:
             return names
         keys = list(map(int, self.model.ntm_config.keys()))
-        os.makedirs(self.log_path+'/samples/'+fn)
+        if not os.path.exists(self.log_path+'/samples/'+fn):
+            os.makedirs(self.log_path+'/samples/'+fn)
         for i in range(self.data_landmarks//self.data_config["lm_count"]) if self.training_params["mode"] == "iter" else range(1):
             for key in keys:
                 pos = self.model.ntm_config[str(key)]['enc_dec_param']['pos']
@@ -434,7 +436,7 @@ class Train(object):
         test_o_2_mm = []
         test_o_3_mm = []
         test_cgt = []
-        sample_count = self.training_params["store_samples"] if start_steps == self.training_params["num_training_iterations"]+1 else 0 # TODO can edit this if we ever want to be able to plot more samples
+        sample_count = 0#self.training_params["store_samples"] if start_steps == self.training_params["num_training_iterations"]+1 else 0 # TODO can edit this if we ever want to be able to plot more samples
         for _ in range(self.dataset_test_size // self.strategy.num_replicas_in_sync):
             img_t, lab_t, fn = next(test)
             if sample_count < self.training_params["store_samples"]:
