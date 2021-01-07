@@ -6,7 +6,7 @@ import imgaug as ia
 import imgaug.augmenters as iaa
 
 import numpy as np
-from heatmapgen import generate_heatmaps
+from utils.heatmapgen import generate_heatmaps
 import matplotlib.pyplot as plt
 
 @tf.function

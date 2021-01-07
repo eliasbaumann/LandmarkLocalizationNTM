@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
-import unet
+import net.unet
 import data
 
 # os.environ["OMP_NUM_THREADS"] = "1"
@@ -19,8 +19,6 @@ import data
 # os.environ["NUMEXPR_NUM_THREADS"] = "1"
 # os.environ["NUMEXPR_MAX_THREADS"] = "1"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-
-
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--conf', type=str, default=None, help='Select a directory in which to search for config.json to execute')
@@ -651,8 +649,8 @@ if __name__ == "__main__":
     store_samples, 10, int, number of samples to store as images x num gpus
     num_gpu, 4, int, number of gpus to use
     '''
-    PATH = '/fast/AG_Kainmueller/elbauma/landmark-ntm/experiments' 
-    DATA_DIR = '/fast/AG_Kainmueller/elbauma/landmark-ntm/datasets/'
+    PATH = 'INSERT PATH TO EXPERIMENT' 
+    DATA_DIR = 'INSER PATH TO DATASETS'
 
     if args.conf is not None:
         PATH = args.conf
@@ -660,8 +658,6 @@ if __name__ == "__main__":
     path_list = [(dirpath,filename) for dirpath, _, filenames in os.walk(PATH) for filename in filenames if filename.endswith('config.json')] # searching for all experiments excluding stored jsons of ran experiments
     for experiment in path_list:
         data_config, opti_config, unet_config, ntm_config, attn_config, training_params = read_json(os.path.join(experiment[0], experiment[1]))
-        # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        # os.environ["CUDA_VISIBLE_DEVICES"] = [str(i) for i in range(training_params["num_gpu"])]
         rn = 1 if args.load else None
         steps = training_params["num_training_iterations"] if args.load else 0
         main(experiment[0], DATA_DIR, data_config, opti_config, unet_config, ntm_config, attn_config, training_params, rn, steps)
