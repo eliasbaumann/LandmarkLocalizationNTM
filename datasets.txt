@@ -1,8 +1,0 @@
-https://figshare.com/s/37ec464af8e81ae6ebbf Cephalometric xray with landmarks
-http://gigadb.org/dataset/100141 Drosophila Wings, annoying dataset
-http://academictorrents.com/details/c501571c29d16d7f41d159d699d0e7fb37092cbd Cats
-https://zenodo.org/record/1400558 thorax
-
-http://opencas.webarchiv.kit.edu/?q=node/30 Instruments -> TODO whether we can use
-https://ibug.doc.ic.ac.uk/resources/300-W/ Faces
-http://vision.cs.illinois.edu/projects/litland/ little landmarks
