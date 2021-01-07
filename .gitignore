@@ -1,5 +1,6 @@
 ignore.py
 __pycache__/*
+.vscode/*
 figures_results/*
 bibliography.Data/
 Meta landmark learning.txt
